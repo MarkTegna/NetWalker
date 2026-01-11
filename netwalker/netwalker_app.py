@@ -329,15 +329,15 @@ class NetWalkerApp:
             # Get device inventory
             inventory = self.discovery_engine.get_inventory().get_all_devices()
             
-            # Generate main discovery report
-            report_path = self.excel_generator.generate_discovery_report(
+            # Generate main discovery report and per-seed reports
+            discovery_reports = self.excel_generator.generate_discovery_report(
                 inventory,
                 self.discovery_results,
                 self.seed_devices
             )
-            report_files.append(report_path)
+            report_files.extend(discovery_reports)
             
-            logger.info(f"Generated discovery report: {report_path}")
+            logger.info(f"Generated {len(discovery_reports)} discovery reports")
             
             # Generate master inventory if multiple seeds
             if len(self.seed_devices) > 1:

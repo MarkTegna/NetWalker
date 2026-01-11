@@ -18,7 +18,8 @@ NetWalker is a Windows-based Python application that automatically discovers and
 ### Reporting & Output
 - **Excel Reports**: Comprehensive device inventory and connection details
 - **Professional Formatting**: Auto-sized columns, filters, and headers
-- **Multiple Sheets**: Consolidated connections, device inventory, per-device details
+- **Multiple Workbooks**: Main discovery report plus per-seed device reports
+- **Neighbor Details**: Individual sheets for each seed's neighbors
 - **Timestamp Naming**: Automatic file naming with timestamps
 
 ### Advanced Features
@@ -162,8 +163,9 @@ Reports generated in ./reports/
 ```
 
 ### Generated Files
-- `NetWalker_Discovery_20260111-14-30.xlsx` - Main discovery report
+- `NetWalker_Discovery_20260111-14-30.xlsx` - Main discovery report (summary, inventory, connections)
 - `NetWalker_Inventory_20260111-14-30.xlsx` - Device inventory
+- `NetWalker_Seed_CORE-SWITCH-A_20260111-14-30.xlsx` - Seed device report with neighbors
 - `netwalker_20260111-14-30.log` - Detailed execution log
 
 ## 🔍 Troubleshooting
