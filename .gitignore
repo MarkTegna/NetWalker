@@ -1,0 +1,70 @@
+# NetWalker .gitignore
+
+# Build artifacts
+build/
+dist/
+*.spec
+*.egg-info/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+test_logs/
+
+# Reports
+reports/
+test_reports/
+
+# Configuration files with sensitive data
+secret_creds.ini
+*_creds.ini
+
+# Test artifacts
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.bak
+
+# Distribution packages
+*.zip
+*.tar.gz
+*.exe
+
+# Backup files
+backup/
+
+# Production test files (keep local, don't distribute)
+prodtest_files/
+
+# Local configuration overrides
+local_*.ini
+dev_*.ini
