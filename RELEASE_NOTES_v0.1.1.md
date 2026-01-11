@@ -27,7 +27,7 @@
 - **Documentation**: Complete setup and usage instructions
 
 ### 🔒 Security
-- **Credential Encryption**: Automatic MD5 encryption of plain text passwords
+- **Credential Security**: Secure credential handling via CLI parameters and environment variables
 - **Clean Distribution**: No production credentials or sensitive data included
 
 ### 📋 System Requirements
@@ -38,20 +38,19 @@
 ### 🛠 Installation
 1. Download `NetWalker_v0.1.1.zip`
 2. Extract to desired directory
-3. Edit `secret_creds.ini` with your device credentials
-4. Edit `seed_file.csv` with your seed devices
-5. Run `netwalker.exe`
+3. Edit `seed_file.csv` with your seed devices
+4. Run `netwalker.exe` with credentials via CLI parameters
 
 ### 📖 Usage Examples
 ```bash
-# Basic discovery
-netwalker.exe
+# Basic discovery with credentials
+netwalker.exe --username admin --password mypass
 
 # Custom configuration
-netwalker.exe --config custom.ini
+netwalker.exe --config custom.ini --username admin --password mypass
 
 # Specific seed devices
-netwalker.exe --seed-devices "router1:192.168.1.1,switch1:192.168.1.2"
+netwalker.exe --seed-devices "router1:192.168.1.1,switch1:192.168.1.2" --username admin --password mypass
 
 # Show help
 netwalker.exe --help

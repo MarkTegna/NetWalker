@@ -81,7 +81,6 @@ block_cipher = None
 datas = [
     # Include sample configuration files
     ('netwalker.ini', '.'),
-    ('secret_creds.ini', '.'),
     ('seed_file.csv', '.'),
     
     # Include any additional data files
@@ -270,27 +269,6 @@ def prepare_supporting_files():
         config_manager = ConfigurationManager()
         config_manager.create_default_config('netwalker.ini')
     
-    if not Path('secret_creds.ini').exists():
-        print("Creating sample secret_creds.ini...")
-        sample_creds = """# NetWalker Credentials Configuration
-# This file contains device authentication credentials
-# Credentials will be automatically encrypted when first used
-
-[credentials]
-# Primary credentials for device access
-username = admin
-password = password123
-
-# Alternative credentials (optional)
-# alt_username = backup_admin
-# alt_password = backup_pass
-
-# Enable password (optional)
-# enable_password = enable123
-"""
-        with open('secret_creds.ini', 'w') as f:
-            f.write(sample_creds)
-    
     if not Path('seed_file.csv').exists():
         print("Creating sample seed_file.csv...")
         sample_seeds = """hostname,ip_address,status,error_details
@@ -355,7 +333,6 @@ def create_distribution_package(version):
     # Copy supporting files to distribution
     supporting_files = [
         'netwalker.ini',
-        'secret_creds.ini', 
         'seed_file.csv',
         'README.md'
     ]
@@ -377,9 +354,8 @@ Network Topology Discovery Tool
 ## Installation
 1. Extract all files to a directory
 2. Edit netwalker.ini with your network settings
-3. Edit secret_creds.ini with your device credentials
-4. Edit seed_file.csv with your seed devices
-5. Run netwalker.exe
+3. Edit seed_file.csv with your seed devices
+4. Run netwalker.exe
 
 ## Usage
 ```
@@ -391,7 +367,6 @@ netwalker.exe --help
 ## Files Included
 - netwalker.exe - Single executable file with all libraries included
 - netwalker.ini - Configuration file
-- secret_creds.ini - Credentials file (will be encrypted automatically)
 - seed_file.csv - Seed devices list
 
 ## Output

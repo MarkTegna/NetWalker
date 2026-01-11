@@ -23,7 +23,7 @@ NetWalker is a Windows-based Python application that automatically discovers and
 
 ### Advanced Features
 - **Device Filtering**: Wildcard patterns, CIDR ranges, platform exclusions
-- **Credential Security**: Automatic MD5 encryption of passwords
+- **Credential Security**: Secure credential handling via CLI parameters or environment variables
 - **Error Recovery**: Continues discovery despite individual device failures
 - **Configurable Depth**: Limit discovery depth to control scope
 - **Comprehensive Logging**: Detailed logs with configurable output directories
@@ -36,22 +36,14 @@ NetWalker is a Windows-based Python application that automatically discovers and
 3. No additional installation required - single executable with all dependencies
 
 ### Configuration
-1. **Edit Credentials** (`secret_creds.ini`):
-   ```ini
-   [credentials]
-   username = your_username
-   password = your_password
-   # enable_password = your_enable_password  # Optional
-   ```
-
-2. **Add Seed Devices** (`seed_file.csv`):
+1. **Add Seed Devices** (`seed_file.csv`):
    ```
    CORE-SWITCH-01
    192.168.1.1
    router.example.com
    ```
 
-3. **Configure Settings** (`netwalker.ini`) - Optional:
+2. **Configure Settings** (`netwalker.ini`) - Optional:
    ```ini
    [discovery]
    max_depth = 10
@@ -62,16 +54,27 @@ NetWalker is a Windows-based Python application that automatically discovers and
    exclude_platforms = linux,windows
    ```
 
+3. **Set Credentials** - Use CLI parameters or environment variables:
+   ```bash
+   # Via command line
+   netwalker.exe --username admin --password mypass
+   
+   # Via environment variables
+   set NETWALKER_USERNAME=admin
+   set NETWALKER_PASSWORD=mypass
+   netwalker.exe
+   ```
+
 ### Run Discovery
 ```bash
-# Basic discovery
-netwalker.exe
+# Basic discovery with credentials
+netwalker.exe --username admin --password mypass
 
 # Custom configuration
-netwalker.exe --config custom.ini
+netwalker.exe --config custom.ini --username admin --password mypass
 
 # Specific seed devices
-netwalker.exe --seed-devices "router1:192.168.1.1,switch1:192.168.1.2"
+netwalker.exe --seed-devices "router1:192.168.1.1,switch1:192.168.1.2" --username admin --password mypass
 
 # Show help
 netwalker.exe --help
@@ -95,7 +98,7 @@ netwalker.exe --help
 ### Connection Methods
 - **SSH**: Primary connection method (port 22)
 - **TELNET**: Automatic fallback for legacy devices (port 23)
-- **Authentication**: Username/password with optional enable password
+- **Authentication**: Username/password via CLI parameters or environment variables
 
 ## 🛠 Configuration Reference
 
@@ -164,7 +167,7 @@ Error: system transport is not supported on windows devices
 ```
 Error: Authentication failed for device X.X.X.X
 ```
-**Solution**: Verify credentials in `secret_creds.ini` and ensure SSH is enabled on target devices.
+**Solution**: Verify credentials provided via CLI parameters and ensure SSH is enabled on target devices.
 
 **Discovery Stops Early**
 ```
