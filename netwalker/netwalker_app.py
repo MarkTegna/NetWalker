@@ -339,16 +339,10 @@ class NetWalkerApp:
             
             logger.info(f"Generated {len(discovery_reports)} discovery reports")
             
-            # Generate master inventory if multiple seeds
-            if len(self.seed_devices) > 1:
-                # For now, treat as single inventory
-                # In future, this could handle multiple separate discoveries
-                master_path = self.excel_generator.generate_master_inventory(
-                    {'combined': inventory},
-                    self.seed_devices
-                )
-                report_files.append(master_path)
-                logger.info(f"Generated master inventory: {master_path}")
+            # Always generate inventory workbook (separate from discovery report)
+            inventory_path = self.excel_generator.generate_inventory_report(inventory)
+            report_files.append(inventory_path)
+            logger.info(f"Generated inventory report: {inventory_path}")
             
             return report_files
             
