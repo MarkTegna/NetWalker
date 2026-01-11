@@ -179,9 +179,9 @@ class NetWalkerApp:
     
     def _initialize_credentials(self):
         """Initialize credential management"""
-        # CredentialManager expects a file path, not the full config
+        # CredentialManager expects a file path and CLI config
         credentials_file = self.config.get('credentials_file', 'secret_creds.ini')
-        self.credential_manager = CredentialManager(credentials_file)
+        self.credential_manager = CredentialManager(credentials_file, self.config)
         logger.info("Credential management initialized")
     
     def _initialize_connection_management(self):

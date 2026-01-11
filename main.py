@@ -37,6 +37,22 @@ Version: {__version__}
         """
     )
     
+    # Credential options
+    parser.add_argument(
+        '--username', '-u',
+        help='Device username for authentication'
+    )
+    
+    parser.add_argument(
+        '--password', '-p',
+        help='Device password for authentication'
+    )
+    
+    parser.add_argument(
+        '--enable-password',
+        help='Device enable password (optional)'
+    )
+    
     # Configuration options
     parser.add_argument(
         '--config', '-c',
@@ -105,6 +121,16 @@ Version: {__version__}
 def convert_args_to_config(args):
     """Convert command-line arguments to configuration dictionary"""
     config_overrides = {}
+    
+    # Credential settings
+    if args.username:
+        config_overrides['username'] = args.username
+    
+    if args.password:
+        config_overrides['password'] = args.password
+    
+    if args.enable_password:
+        config_overrides['enable_password'] = args.enable_password
     
     # Discovery settings
     if args.seed_devices:

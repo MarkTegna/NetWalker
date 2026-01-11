@@ -1,11 +1,12 @@
 """
-Credential management with encryption support
+Credential management with encryption support and interactive prompting
 """
 
 import configparser
 import hashlib
 import logging
 import os
+import getpass
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
@@ -19,22 +20,78 @@ class Credentials:
 
 
 class CredentialManager:
-    """Manages device credentials with encryption support"""
+    """Manages device credentials with encryption support and interactive prompting"""
     
-    def __init__(self, credentials_file: str = "secret_creds.ini"):
+    def __init__(self, credentials_file: str = "secret_creds.ini", cli_config: Optional[Dict[str, Any]] = None):
         self.credentials_file = credentials_file
+        self.cli_config = cli_config or {}
         self.logger = logging.getLogger(__name__)
         self._credentials = {}
         
     def get_credentials(self) -> Optional[Credentials]:
         """
-        Retrieve authentication credentials with encryption support
+        Retrieve authentication credentials from multiple sources with fallback to interactive prompting
+        
+        Priority order:
+        1. CLI arguments (--username, --password)
+        2. Environment variables (NETWALKER_USERNAME, NETWALKER_PASSWORD)
+        3. Configuration file (secret_creds.ini)
+        4. Interactive prompting
         
         Returns:
             Credentials object or None if no credentials available
         """
+        username = None
+        password = None
+        enable_password = None
+        
+        # 1. Check CLI arguments first (highest priority)
+        if self.cli_config.get('username') and self.cli_config.get('password'):
+            username = self.cli_config['username']
+            password = self.cli_config['password']
+            enable_password = self.cli_config.get('enable_password')
+            self.logger.info("Using credentials from CLI arguments")
+        
+        # 2. Check environment variables
+        elif os.getenv('NETWALKER_USERNAME') and os.getenv('NETWALKER_PASSWORD'):
+            username = os.getenv('NETWALKER_USERNAME')
+            password = os.getenv('NETWALKER_PASSWORD')
+            enable_password = os.getenv('NETWALKER_ENABLE_PASSWORD')
+            self.logger.info("Using credentials from environment variables")
+        
+        # 3. Check configuration file
+        elif os.path.exists(self.credentials_file):
+            file_creds = self._load_credentials_from_file()
+            if file_creds:
+                username = file_creds.username
+                password = file_creds.password
+                enable_password = file_creds.enable_password
+                self.logger.info("Using credentials from configuration file")
+        
+        # 4. Interactive prompting (fallback)
+        if not username or not password:
+            self.logger.info("No credentials found in CLI, environment, or config file - prompting user")
+            username, password, enable_password = self._prompt_for_credentials()
+        
+        if not username or not password:
+            self.logger.error("No valid credentials available")
+            return None
+        
+        return Credentials(
+            username=username,
+            password=password,
+            enable_password=enable_password
+        )
+    
+    def _load_credentials_from_file(self) -> Optional[Credentials]:
+        """
+        Load credentials from configuration file
+        
+        Returns:
+            Credentials object or None if file not found or invalid
+        """
         if not os.path.exists(self.credentials_file):
-            self.logger.warning(f"Credentials file {self.credentials_file} not found")
+            self.logger.debug(f"Credentials file {self.credentials_file} not found")
             return None
             
         config = configparser.ConfigParser(interpolation=None)
@@ -53,18 +110,14 @@ class CredentialManager:
         enable_password = config.get('credentials', 'enable_password', fallback=None)
         
         if not username or not password:
-            self.logger.error("Username or password not found in credentials file")
+            self.logger.debug("Username or password not found in credentials file")
             return None
             
         # Check if password is encrypted (MD5 hash format)
         if self._is_encrypted(password):
-            self.logger.info("Using encrypted credentials")
-            # For this implementation, we'll store the hash but note that
-            # MD5 is not secure for real password storage - this is just for demo
+            self.logger.debug("Decrypting password from file")
             password = self._decrypt_password(password)
-        else:
-            self.logger.info("Using plain text credentials")
-            
+        
         if enable_password and self._is_encrypted(enable_password):
             enable_password = self._decrypt_password(enable_password)
             
@@ -73,6 +126,50 @@ class CredentialManager:
             password=password,
             enable_password=enable_password
         )
+    
+    def _prompt_for_credentials(self) -> tuple[str, str, Optional[str]]:
+        """
+        Interactively prompt user for credentials
+        
+        Returns:
+            Tuple of (username, password, enable_password)
+        """
+        print("\n" + "="*50)
+        print("NetWalker Credential Setup")
+        print("="*50)
+        print("No credentials found. Please provide device authentication details:")
+        print()
+        
+        try:
+            # Prompt for username
+            username = input("Username: ").strip()
+            if not username:
+                print("Username cannot be empty")
+                return "", "", None
+            
+            # Prompt for password (hidden input)
+            password = getpass.getpass("Password: ")
+            if not password:
+                print("Password cannot be empty")
+                return "", "", None
+            
+            # Prompt for enable password (optional)
+            enable_prompt = input("Enable password (optional, press Enter to skip): ").strip()
+            enable_password = enable_prompt if enable_prompt else None
+            
+            print()
+            print("Credentials entered successfully!")
+            print("="*50)
+            print()
+            
+            return username, password, enable_password
+            
+        except (KeyboardInterrupt, EOFError):
+            print("\nCredential entry cancelled by user")
+            return "", "", None
+        except Exception as e:
+            self.logger.error(f"Error during credential prompting: {e}")
+            return "", "", None
     
     def _encrypt_plain_text_credentials(self, config: configparser.ConfigParser):
         """

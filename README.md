@@ -23,7 +23,7 @@ NetWalker is a Windows-based Python application that automatically discovers and
 
 ### Advanced Features
 - **Device Filtering**: Wildcard patterns, CIDR ranges, platform exclusions
-- **Credential Security**: Secure credential handling via CLI parameters or environment variables
+- **Credential Security**: Multiple credential sources with interactive prompting fallback
 - **Error Recovery**: Continues discovery despite individual device failures
 - **Configurable Depth**: Limit discovery depth to control scope
 - **Comprehensive Logging**: Detailed logs with configurable output directories
@@ -54,26 +54,39 @@ NetWalker is a Windows-based Python application that automatically discovers and
    exclude_platforms = linux,windows
    ```
 
-3. **Set Credentials** - Use CLI parameters or environment variables:
+3. **Set Credentials** - Multiple options available:
    ```bash
-   # Via command line
+   # Option 1: CLI parameters (recommended for one-time use)
    netwalker.exe --username admin --password mypass
    
-   # Via environment variables
+   # Option 2: Environment variables (recommended for automation)
    set NETWALKER_USERNAME=admin
    set NETWALKER_PASSWORD=mypass
    netwalker.exe
+   
+   # Option 3: Interactive prompting (if no credentials provided)
+   netwalker.exe
+   # Will prompt: "Username: " and "Password: "
    ```
 
 ### Run Discovery
 ```bash
-# Basic discovery with credentials
+# Basic discovery with CLI credentials
 netwalker.exe --username admin --password mypass
 
-# Custom configuration
+# Using environment variables
+set NETWALKER_USERNAME=admin
+set NETWALKER_PASSWORD=mypass
+netwalker.exe
+
+# Interactive prompting (no credentials provided)
+netwalker.exe
+# Will prompt for username and password
+
+# Custom configuration with credentials
 netwalker.exe --config custom.ini --username admin --password mypass
 
-# Specific seed devices
+# Specific seed devices with credentials
 netwalker.exe --seed-devices "router1:192.168.1.1,switch1:192.168.1.2" --username admin --password mypass
 
 # Show help
@@ -98,7 +111,7 @@ netwalker.exe --help
 ### Connection Methods
 - **SSH**: Primary connection method (port 22)
 - **TELNET**: Automatic fallback for legacy devices (port 23)
-- **Authentication**: Username/password via CLI parameters or environment variables
+- **Authentication**: Multiple credential sources (CLI, environment, interactive prompting)
 
 ## 🛠 Configuration Reference
 
@@ -167,7 +180,7 @@ Error: system transport is not supported on windows devices
 ```
 Error: Authentication failed for device X.X.X.X
 ```
-**Solution**: Verify credentials provided via CLI parameters and ensure SSH is enabled on target devices.
+**Solution**: Verify credentials. NetWalker will prompt for credentials if none are provided via CLI or environment variables.
 
 **Discovery Stops Early**
 ```

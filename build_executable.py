@@ -284,11 +284,20 @@ def run_pyinstaller():
     """Run PyInstaller to create the executable"""
     print("Running PyInstaller...")
     
-    # Clean previous builds
-    if Path('dist').exists():
-        shutil.rmtree('dist')
-    if Path('build').exists():
-        shutil.rmtree('build')
+    # Clean previous builds (handle locked files gracefully)
+    try:
+        if Path('dist').exists():
+            shutil.rmtree('dist')
+    except PermissionError as e:
+        print(f"Warning: Could not remove dist directory: {e}")
+        print("Continuing with build...")
+    
+    try:
+        if Path('build').exists():
+            shutil.rmtree('build')
+    except PermissionError as e:
+        print(f"Warning: Could not remove build directory: {e}")
+        print("Continuing with build...")
     
     # Run PyInstaller
     cmd = [

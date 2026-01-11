@@ -27,7 +27,7 @@
 - **Documentation**: Complete setup and usage instructions
 
 ### 🔒 Security
-- **Credential Security**: Secure credential handling via CLI parameters and environment variables
+- **Credential Security**: Multiple credential sources with interactive prompting fallback
 - **Clean Distribution**: No production credentials or sensitive data included
 
 ### 📋 System Requirements
@@ -39,17 +39,26 @@
 1. Download `NetWalker_v0.1.1.zip`
 2. Extract to desired directory
 3. Edit `seed_file.csv` with your seed devices
-4. Run `netwalker.exe` with credentials via CLI parameters
+4. Run `netwalker.exe` - credentials will be prompted if not provided
 
 ### 📖 Usage Examples
 ```bash
-# Basic discovery with credentials
+# Basic discovery with CLI credentials
 netwalker.exe --username admin --password mypass
 
-# Custom configuration
+# Using environment variables
+set NETWALKER_USERNAME=admin
+set NETWALKER_PASSWORD=mypass
+netwalker.exe
+
+# Interactive prompting (no credentials provided)
+netwalker.exe
+# Will prompt: "Username: " and "Password: "
+
+# Custom configuration with credentials
 netwalker.exe --config custom.ini --username admin --password mypass
 
-# Specific seed devices
+# Specific seed devices with credentials
 netwalker.exe --seed-devices "router1:192.168.1.1,switch1:192.168.1.2" --username admin --password mypass
 
 # Show help
