@@ -328,8 +328,10 @@ class NetWalkerApp:
             
             # Get device inventory
             inventory = self.discovery_engine.get_inventory().get_all_devices()
+            logger.info(f"Retrieved inventory with {len(inventory)} devices")
             
             # Generate main discovery report and per-seed reports
+            logger.info("Generating main discovery report and per-seed reports...")
             discovery_reports = self.excel_generator.generate_discovery_report(
                 inventory,
                 self.discovery_results,
@@ -337,17 +339,23 @@ class NetWalkerApp:
             )
             report_files.extend(discovery_reports)
             
-            logger.info(f"Generated {len(discovery_reports)} discovery reports")
+            logger.info(f"Generated {len(discovery_reports)} discovery reports: {discovery_reports}")
             
             # Always generate inventory workbook (separate from discovery report)
+            logger.info("Generating standalone inventory report...")
             inventory_path = self.excel_generator.generate_inventory_report(inventory)
             report_files.append(inventory_path)
             logger.info(f"Generated inventory report: {inventory_path}")
+            
+            logger.info(f"Total reports generated: {len(report_files)}")
+            for report in report_files:
+                logger.info(f"  - {report}")
             
             return report_files
             
         except Exception as e:
             logger.error(f"Report generation failed: {e}")
+            logger.exception("Full exception details:")
             raise
     
     def run_discovery(self) -> bool:
