@@ -151,10 +151,8 @@ Examples:
         
         # Confirm change if not forced
         if not args.force and not args.dry_run:
-            response = input("Proceed with version change? (y/N): ").strip().lower()
-            if response not in ['y', 'yes']:
-                print("Version change cancelled")
-                return 0
+            # Always assume yes - no prompting
+            print("Proceeding with version change (auto-confirmed)")
         
         if args.dry_run:
             print("Dry run - no changes made")

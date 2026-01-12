@@ -329,46 +329,65 @@ class ConnectionManager:
             True if connection closed successfully
         """
         if host not in self._active_connections:
-            self.logger.warning(f"No active connection found for {host}")
+            self.logger.debug(f"No active connection found for {host} (may already be closed)")
             return False
             
         try:
             connection = self._active_connections[host]
+            self.logger.debug(f"Closing connection to {host}...")
             
             # Send exit commands to properly terminate session (causes host to disconnect)
-            self.logger.debug(f"Sending exit commands to {host}")
             try:
                 # Determine connection type and send appropriate exit commands
                 if hasattr(connection, 'send_command') and hasattr(connection, 'device_type'):
                     # Netmiko connection - send exit and disconnect properly
+                    self.logger.debug(f"Closing netmiko connection to {host}")
                     try:
-                        connection.send_command("exit", expect_string="", read_timeout=5)
+                        # Try to send exit command with short timeout
+                        connection.send_command("exit", expect_string="", read_timeout=3)
                     except:
                         pass  # Exit command may cause connection to close immediately
+                    
+                    # Always call disconnect to ensure cleanup
                     connection.disconnect()
+                    
                 elif hasattr(connection, 'send_command') and hasattr(connection, 'transport'):
                     # Scrapli connection
+                    self.logger.debug(f"Closing scrapli connection to {host}")
                     try:
+                        # Try to send exit command with short timeout
                         connection.send_command("exit", expect_string="")
                     except:
                         pass  # Exit command may cause connection to close immediately
+                    
+                    # Always call close to ensure cleanup
                     connection.close()
+                    
                 else:
                     self.logger.warning(f"Unknown connection type for {host}: {type(connection)}")
+                    # Try generic close methods
+                    if hasattr(connection, 'close'):
+                        connection.close()
+                    elif hasattr(connection, 'disconnect'):
+                        connection.disconnect()
+                        
             except Exception as e:
-                self.logger.debug(f"Error during exit command for {host}: {str(e)}")
+                self.logger.debug(f"Error during graceful close for {host}: {str(e)}")
                 # Force disconnect anyway
-                if hasattr(connection, 'disconnect'):
-                    connection.disconnect()
-                elif hasattr(connection, 'close'):
-                    connection.close()
+                try:
+                    if hasattr(connection, 'disconnect'):
+                        connection.disconnect()
+                    elif hasattr(connection, 'close'):
+                        connection.close()
+                except Exception as force_error:
+                    self.logger.debug(f"Force close also failed for {host}: {force_error}")
             
             # Remove from active connections and locks
             del self._active_connections[host]
             if host in self._connection_locks:
                 del self._connection_locks[host]
             
-            self.logger.info(f"Connection to {host} closed successfully with proper cleanup")
+            self.logger.debug(f"Connection to {host} closed successfully")
             return True
             
         except Exception as e:
@@ -411,3 +430,24 @@ class ConnectionManager:
             Dictionary of host -> connection status
         """
         return {host: "active" for host in self._active_connections.keys()}
+    
+    def get_active_connection_count(self) -> int:
+        """
+        Get count of active connections
+        
+        Returns:
+            Number of active connections
+        """
+        return len(self._active_connections)
+    
+    def log_connection_status(self):
+        """Log current connection status for debugging"""
+        active_count = len(self._active_connections)
+        if active_count > 0:
+            self.logger.info(f"Active connections: {active_count}")
+            for host in list(self._active_connections.keys())[:5]:  # Log first 5
+                self.logger.debug(f"  - Active connection: {host}")
+            if active_count > 5:
+                self.logger.debug(f"  - ... and {active_count - 5} more")
+        else:
+            self.logger.debug("No active connections")

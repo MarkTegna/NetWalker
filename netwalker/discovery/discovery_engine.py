@@ -262,6 +262,13 @@ class DiscoveryEngine:
                 # Discover device
                 self._discover_device(current_node)
                 
+                # Monitor connection status periodically
+                if self.devices_processed % 10 == 0:  # Every 10 devices
+                    active_connections = self.connection_manager.get_active_connection_count()
+                    if active_connections > 0:
+                        logger.warning(f"[CONNECTION LEAK] {active_connections} connections still active after device processing")
+                        self.connection_manager.log_connection_status()
+                
                 # Update progress after processing device
                 self.devices_processed += 1
                 self._update_progress_display()
@@ -275,6 +282,15 @@ class DiscoveryEngine:
             raise
         
         discovery_time = time.time() - self.discovery_start_time
+        
+        # Final connection status check
+        active_connections = self.connection_manager.get_active_connection_count()
+        if active_connections > 0:
+            logger.error(f"[CONNECTION LEAK] {active_connections} connections still active after discovery completion!")
+            self.connection_manager.log_connection_status()
+        else:
+            logger.info("[CONNECTION STATUS] All connections properly closed during discovery")
+        
         results = self._generate_discovery_summary(discovery_time)
         
         logger.info(f"Discovery completed in {discovery_time:.2f}s - "
@@ -538,8 +554,8 @@ class DiscoveryEngine:
             # Get neighbors from DeviceInfo object
             neighbors = device_info.neighbors
             
-            # Close connection
-            self.connection_manager.close_connection(node.hostname)
+            # Close connection using the same key that was used to create it
+            self.connection_manager.close_connection(node.ip_address)
             
             return DiscoveryResult(
                 hostname=node.hostname,
