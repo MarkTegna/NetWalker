@@ -5,6 +5,50 @@ All notable changes to NetWalker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-01-12
+
+### Added
+- **Version Management Standards**: Implemented comprehensive versioning system with automatic/user build distinction
+- **Enhanced Property-Based Testing**: 11+ universal properties with 100+ iterations each for comprehensive coverage
+- **Comprehensive Documentation Suite**: NetWalker Comprehensive Guide, Quick Start Guide, and multiple technical summaries
+- **DNS Validation Framework**: Enhanced DNS resolution and validation capabilities
+- **Local Version Steering**: Project-specific version management rules and standards
+
+### Fixed
+- **Site Boundary Detection Critical Fix**: Resolved bug where devices matching `*-CORE-*` pattern weren't generating separate workbooks
+  - Fixed condition from `len(site_boundaries) > 1` to `len(site_boundaries) >= 1`
+  - Now correctly creates separate workbooks for single-site discoveries
+  - Verified with LUMT-CORE-A and BORO-CORE-A test scenarios
+- **Configuration Optimization**: Updated default `max_depth` from various values (2, 5, 9, 10) to consistent value of 1
+  - Updated in netwalker.ini, config_manager.py, data_models.py, and discovery_engine.py
+  - Optimizes discovery performance for typical network scenarios
+
+### Enhanced
+- **Hostname Cleaning Integration**: Improved pattern matching with cleaned hostnames for better site detection
+- **Device Association Logic**: Multiple association methods (pattern match, seed device, parent device, hostname prefix, neighbor)
+- **Error Handling**: Comprehensive error handling and graceful degradation mechanisms
+- **Build Process**: Enhanced build scripts with proper version management and distribution creation
+
+### Testing
+- **Site Boundary Detection Tests**: Comprehensive property-based tests covering all scenarios
+- **Integration Tests**: Multi-site discovery scenarios and edge case handling
+- **DNS Property Tests**: Validation of DNS resolution and filtering functionality
+- **Configuration Tests**: Validation of configuration loading and CLI overrides
+
+### Documentation
+- Added SITE_BOUNDARY_DETECTION_CRITICAL_FIX_SUMMARY.md
+- Added NETWALKER_COMPREHENSIVE_GUIDE.md
+- Added QUICK_START_GUIDE.md
+- Added multiple technical fix summaries and release notes
+- Enhanced README.md with current version information
+
+### Version Management
+- MINOR increment: 0.2.56 → 0.3.1 (following new version management standards)
+- User-requested build (no letter suffix)
+- Automatic PATCH increment during build process
+- Created GitHub release with distribution ZIP file
+- Archived distribution in /Archive directory
+
 ## [0.2.53] - 2026-01-12
 
 ### Fixed
