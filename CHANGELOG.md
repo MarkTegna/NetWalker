@@ -5,6 +5,59 @@ All notable changes to NetWalker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-01-12
+
+### Fixed
+- **CRITICAL: Connection Leak Resolution**
+  - Fixed key mismatch between `connect_device()` and `close_connection()` calls
+  - Connections now properly closed immediately after each device discovery
+  - Eliminates memory leaks during large network discoveries (1481+ devices)
+  - Root cause: Discovery engine used `node.ip_address` for connect but `node.hostname` for close
+
+- **CRITICAL: Hanging Issue Prevention**
+  - Added 30-second timeout mechanisms to ThreadManager and ConnectionManager
+  - Prevents indefinite hangs during application cleanup after discovery completion
+  - Enhanced signal handling for graceful shutdown (SIGINT/SIGTERM)
+  - Force shutdown fallback if graceful cleanup fails within timeout
+
+### Added
+- **Version Management System**
+  - Implemented letter suffix system for automatic vs user builds
+  - Automatic builds: Add letter suffixes (0.3.4 → 0.3.4a → 0.3.4b)
+  - User builds: Remove letters and increment PATCH (0.3.4a → 0.3.5)
+  - Updated `increment_build.py` and `build_executable.py` to follow new standards
+
+- **Connection Monitoring and Debugging**
+  - Real-time connection count monitoring during discovery process
+  - Periodic leak detection every 10 devices with detailed logging
+  - Final connection status verification after discovery completion
+  - Added `get_active_connection_count()` and `log_connection_status()` methods
+
+### Enhanced
+- **Connection Management Robustness**
+  - Improved connection closing with proper exit commands and timeouts
+  - Multiple fallback mechanisms for robust cleanup (netmiko and scrapli)
+  - Reduced connection timeouts for faster cleanup (3-second exit timeout)
+  - Better error handling with comprehensive logging and recovery
+
+- **Thread Management**
+  - Enhanced ThreadManager with force shutdown capability after timeout
+  - Better task cancellation for pending operations
+  - Improved completion waiting with timeout support
+  - Comprehensive statistics and monitoring
+
+### Technical Details
+- Fixed `discovery_engine.py` line 542: `close_connection(node.hostname)` → `close_connection(node.ip_address)`
+- Enhanced ConnectionManager timeout protection for all operations
+- Improved ThreadManager with graceful degradation capabilities
+- Added comprehensive error handling throughout cleanup processes
+
+### Impact
+- Resolves hanging after large discoveries (1481 devices, 57 spreadsheets)
+- Eliminates memory leaks from unclosed connections
+- Ensures reliable operation in production environments
+- Maintains backward compatibility with existing configurations
+
 ## [0.3.1] - 2026-01-12
 
 ### Added
