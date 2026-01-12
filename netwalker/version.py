@@ -2,6 +2,6 @@
 Version information for NetWalker
 """
 
-__version__ = "0.3.3a"  # MAJOR.MINOR.PATCH format
+__version__ = "0.3.4"  # MAJOR.MINOR.PATCH format
 __author__ = "Mark Oldham"
 __compile_date__ = "2026-01-12"
