@@ -14,19 +14,31 @@ class ProtocolParser:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
-        # CDP parsing patterns
+        # CDP parsing patterns - enhanced for NEXUS
         self.cdp_device_pattern = re.compile(r'Device ID:\s*(.+)', re.IGNORECASE)
-        self.cdp_ip_pattern = re.compile(r'IP address:\s*(\d+\.\d+\.\d+\.\d+)', re.IGNORECASE)
-        self.cdp_platform_pattern = re.compile(r'Platform:\s*(.+?),', re.IGNORECASE)
+        self.cdp_ip_pattern = re.compile(r'(?:IP address|Entry address\(es\)):\s*(\d+\.\d+\.\d+\.\d+)', re.IGNORECASE)
+        self.cdp_platform_pattern = re.compile(r'Platform:\s*(.+?)(?:,|\n)', re.IGNORECASE)
         self.cdp_capabilities_pattern = re.compile(r'Capabilities:\s*(.+)', re.IGNORECASE)
         self.cdp_interface_pattern = re.compile(r'Interface:\s*(.+?),\s*Port ID \(outgoing port\):\s*(.+)', re.IGNORECASE)
         
-        # LLDP parsing patterns
+        # Enhanced patterns for NEXUS CDP output - fixed for actual format
+        self.nexus_cdp_interface_pattern = re.compile(r'Local Intrfce:\s*(.+?)\s+Holdtme:\s*\d+\s+Capability:\s*.+?\s+Port ID:\s*(.+)', re.IGNORECASE | re.DOTALL)
+        self.nexus_cdp_mgmt_pattern = re.compile(r'Management address\(es\):\s*IP address:\s*(\d+\.\d+\.\d+\.\d+)', re.IGNORECASE)
+        
+        # Additional patterns for IPv4 Address format found in actual CDP output
+        self.cdp_ipv4_pattern = re.compile(r'IPv4 Address:\s*(\d+\.\d+\.\d+\.\d+)', re.IGNORECASE)
+        self.cdp_interface_address_pattern = re.compile(r'Interface address\(es\):\s*\d+\s*IPv4 Address:\s*(\d+\.\d+\.\d+\.\d+)', re.IGNORECASE | re.DOTALL)
+        
+        # LLDP parsing patterns - enhanced for NEXUS
         self.lldp_system_name_pattern = re.compile(r'System Name:\s*(.+)', re.IGNORECASE)
         self.lldp_system_desc_pattern = re.compile(r'System Description:\s*(.+)', re.IGNORECASE)
         self.lldp_port_id_pattern = re.compile(r'Port id:\s*(.+)', re.IGNORECASE)
         self.lldp_local_port_pattern = re.compile(r'Local Intf:\s*(.+)', re.IGNORECASE)
         self.lldp_capabilities_pattern = re.compile(r'System Capabilities:\s*(.+)', re.IGNORECASE)
+        
+        # Enhanced NEXUS LLDP patterns
+        self.nexus_lldp_chassis_pattern = re.compile(r'Chassis id:\s*(.+)', re.IGNORECASE)
+        self.nexus_lldp_mgmt_pattern = re.compile(r'Management Addresses:\s*(.+)', re.IGNORECASE)
         
     def parse_cdp_neighbors(self, cdp_output: str) -> List[NeighborInfo]:
         """
@@ -66,7 +78,7 @@ class ProtocolParser:
     
     def _parse_cdp_entry(self, entry: str) -> Optional[NeighborInfo]:
         """
-        Parse a single CDP neighbor entry
+        Parse a single CDP neighbor entry with enhanced NEXUS support
         
         Args:
             entry: Single CDP neighbor entry text
@@ -75,35 +87,94 @@ class ProtocolParser:
             NeighborInfo object or None if parsing failed
         """
         try:
+            self.logger.debug(f"Parsing CDP entry: {entry[:200]}...")
+            
             # Extract device ID (hostname)
             device_match = self.cdp_device_pattern.search(entry)
             if not device_match:
+                self.logger.debug("No Device ID found in CDP entry")
                 return None
             device_id = device_match.group(1).strip()
             
-            # Extract IP address
-            ip_match = self.cdp_ip_pattern.search(entry)
-            ip_address = ip_match.group(1) if ip_match else None
+            # Clean up device ID - remove FQDN if present
+            if '.' in device_id:
+                device_id = device_id.split('.')[0]
+            
+            self.logger.debug(f"Found CDP device ID: {device_id}")
+            
+            # Extract IP address - try multiple patterns for different CDP formats
+            ip_address = None
+            
+            # Try IPv4 Address pattern first (most common in actual output)
+            ipv4_match = self.cdp_ipv4_pattern.search(entry)
+            if ipv4_match:
+                ip_address = ipv4_match.group(1)
+                self.logger.debug(f"Found IP using IPv4 Address pattern: {ip_address}")
+            
+            # Try Interface address pattern (with context)
+            if not ip_address:
+                interface_addr_match = self.cdp_interface_address_pattern.search(entry)
+                if interface_addr_match:
+                    ip_address = interface_addr_match.group(1)
+                    self.logger.debug(f"Found IP using Interface address pattern: {ip_address}")
+            
+            # Standard CDP IP pattern (fallback)
+            if not ip_address:
+                ip_match = self.cdp_ip_pattern.search(entry)
+                if ip_match:
+                    ip_address = ip_match.group(1)
+                    self.logger.debug(f"Found IP using standard pattern: {ip_address}")
+            
+            # NEXUS management address pattern (fallback)
+            if not ip_address:
+                mgmt_match = self.nexus_cdp_mgmt_pattern.search(entry)
+                if mgmt_match:
+                    ip_address = mgmt_match.group(1)
+                    self.logger.debug(f"Found IP using NEXUS mgmt pattern: {ip_address}")
+            
+            if not ip_address:
+                self.logger.debug(f"No IP address found in CDP entry for device {device_id}")
             
             # Extract platform
             platform_match = self.cdp_platform_pattern.search(entry)
             platform = platform_match.group(1).strip() if platform_match else "Unknown"
+            
+            # Clean up platform string
+            if ',' in platform:
+                platform = platform.split(',')[0].strip()
+            
+            self.logger.debug(f"Found CDP platform: {platform}")
             
             # Extract capabilities
             cap_match = self.cdp_capabilities_pattern.search(entry)
             capabilities_str = cap_match.group(1).strip() if cap_match else ""
             capabilities = [cap.strip() for cap in capabilities_str.split() if cap.strip()]
             
-            # Extract interface information
+            self.logger.debug(f"Found CDP capabilities: {capabilities}")
+            
+            # Extract interface information - try multiple patterns
+            local_interface = "Unknown"
+            remote_interface = "Unknown"
+            
+            # Standard CDP interface pattern
             interface_match = self.cdp_interface_pattern.search(entry)
             if interface_match:
                 local_interface = interface_match.group(1).strip()
                 remote_interface = interface_match.group(2).strip()
+                self.logger.debug(f"Found interfaces using standard pattern: {local_interface} -> {remote_interface}")
             else:
-                local_interface = "Unknown"
-                remote_interface = "Unknown"
+                # Try NEXUS-specific pattern
+                nexus_match = self.nexus_cdp_interface_pattern.search(entry)
+                if nexus_match:
+                    local_interface = nexus_match.group(1).strip()
+                    remote_interface = nexus_match.group(2).strip()
+                    self.logger.debug(f"Found interfaces using NEXUS pattern: {local_interface} -> {remote_interface}")
             
-            return NeighborInfo(
+            # Normalize interface names
+            local_interface = self._normalize_interface_name(local_interface)
+            remote_interface = self._normalize_interface_name(remote_interface)
+            
+            neighbor = NeighborInfo(
                 device_id=device_id,
                 local_interface=local_interface,
                 remote_interface=remote_interface,
@@ -113,8 +184,12 @@ class ProtocolParser:
                 protocol="CDP"
             )
             
+            self.logger.info(f"Successfully parsed CDP neighbor: {device_id} ({ip_address}) via {local_interface}")
+            return neighbor
+            
         except Exception as e:
             self.logger.error(f"Error parsing CDP entry: {str(e)}")
+            self.logger.debug(f"Failed CDP entry content: {entry}")
             return None
     
     def parse_lldp_neighbors(self, lldp_output: str) -> List[NeighborInfo]:
@@ -201,6 +276,75 @@ class ProtocolParser:
             self.logger.error(f"Error parsing LLDP entry: {str(e)}")
             return None
     
+    def _normalize_interface_name(self, interface_name: str) -> str:
+        """
+        Normalize interface names for consistency across platforms
+        
+        Args:
+            interface_name: Raw interface name from device output
+            
+        Returns:
+            Normalized interface name
+        """
+        if not interface_name or interface_name == "Unknown":
+            return interface_name
+        
+        # Remove common prefixes and normalize
+        interface_name = interface_name.strip()
+        
+        # Handle NEXUS interface formats
+        # Ethernet1/1 -> Eth1/1
+        interface_name = re.sub(r'^Ethernet(\d+/\d+)', r'Eth\1', interface_name)
+        
+        # Handle port-channel formats
+        # port-channel1 -> Po1
+        interface_name = re.sub(r'^port-channel(\d+)', r'Po\1', interface_name, flags=re.IGNORECASE)
+        
+        # Handle management interfaces
+        # mgmt0 -> Mgmt0
+        interface_name = re.sub(r'^mgmt(\d+)', r'Mgmt\1', interface_name, flags=re.IGNORECASE)
+        
+        # Handle Vlan interfaces
+        # Vlan1 -> Vlan1 (keep as is)
+        
+        return interface_name
+    
+    def get_neighbor_summary(self, neighbors: List[NeighborInfo]) -> Dict[str, Any]:
+        """
+        Generate summary statistics for discovered neighbors
+        
+        Args:
+            neighbors: List of NeighborInfo objects
+            
+        Returns:
+            Dictionary with neighbor statistics
+        """
+        if not neighbors:
+            return {
+                'total_neighbors': 0,
+                'cdp_neighbors': 0,
+                'lldp_neighbors': 0,
+                'neighbors_with_ip': 0,
+                'unique_platforms': [],
+                'interface_types': []
+            }
+        
+        cdp_count = sum(1 for n in neighbors if n.protocol == "CDP")
+        lldp_count = sum(1 for n in neighbors if n.protocol == "LLDP")
+        ip_count = sum(1 for n in neighbors if n.ip_address)
+        
+        platforms = list(set(n.platform for n in neighbors if n.platform != "Unknown"))
+        interfaces = list(set(n.local_interface for n in neighbors if n.local_interface != "Unknown"))
+        
+        return {
+            'total_neighbors': len(neighbors),
+            'cdp_neighbors': cdp_count,
+            'lldp_neighbors': lldp_count,
+            'neighbors_with_ip': ip_count,
+            'unique_platforms': platforms,
+            'interface_types': interfaces
+        }
+    
     def extract_hostname(self, neighbor_entry: NeighborInfo) -> str:
         """
         Extract clean hostname from neighbor device ID
@@ -219,7 +363,10 @@ class ProtocolParser:
             hostname = device_id.split('.')[0]
         else:
             hostname = device_id
-            
+        
+        # Remove serial numbers in parentheses first (e.g., "DEVICE(FOX123)" -> "DEVICE")
+        hostname = re.sub(r'\([^)]*\)', '', hostname)
+        
         # Remove any trailing whitespace or special characters
         hostname = re.sub(r'[^\w-]', '', hostname)
         

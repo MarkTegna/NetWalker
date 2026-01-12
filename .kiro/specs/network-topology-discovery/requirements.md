@@ -81,6 +81,7 @@ The NetWalker Tool is a Windows-based Python application that automatically disc
 4. WHEN formatting Excel output, THE Report_Generator SHALL apply professional formatting with headers, filters, and auto-sizing
 5. WHEN multiple seeds are discovered, THE Report_Generator SHALL create a master inventory workbook with consolidated device listings
 6. WHEN saving Excel files, THE Report_Generator SHALL use timestamp-based naming convention
+7. WHEN displaying device IP addresses in inventory sheets, THE Report_Generator SHALL extract IP addresses from both 'ip_address' and 'primary_ip' fields with proper fallback logic
 
 ### Requirement 6: Microsoft Visio Integration
 
@@ -167,3 +168,40 @@ The NetWalker Tool is a Windows-based Python application that automatically disc
 3. WHEN no output directories are specified, THE NetWalker SHALL default to .\reports and .\logs respectively
 4. WHEN output directories do not exist, THE NetWalker SHALL create them automatically
 5. WHEN file naming is required, THE NetWalker SHALL use YYYYMMDD-HH-MM format for timestamps
+
+### Requirement 13: Discovery Timeout and Queue Management
+
+**User Story:** As a network administrator, I want configurable discovery timeouts separate from connection timeouts, so that large network discoveries can complete without premature termination.
+
+#### Acceptance Criteria
+
+1. WHEN discovery timeout is configured, THE NetWalker SHALL use separate timeout values for discovery operations vs individual connections
+2. WHEN discovery is running, THE NetWalker SHALL process all queued devices within the discovery timeout window
+3. WHEN discovery timeout is reached, THE NetWalker SHALL complete processing of currently active connections before terminating
+4. WHEN discovery queue has remaining devices, THE NetWalker SHALL continue processing until timeout or queue empty
+5. WHEN discovery completes, THE NetWalker SHALL log summary of processed vs queued devices
+6. WHEN new devices are added to the discovery queue after duplicate checking, THE NetWalker SHALL reset the discovery timeout to ensure large networks are not prematurely terminated
+
+### Requirement 14: Enhanced Discovery Logging and Decision Tracking
+
+**User Story:** As a network administrator, I want detailed logging of discovery decisions and filtering logic, so that I can troubleshoot why devices are included or excluded from discovery.
+
+#### Acceptance Criteria
+
+1. WHEN filtering decisions are made, THE NetWalker SHALL log detailed reasoning for inclusion/exclusion
+2. WHEN devices are added to discovery queue, THE NetWalker SHALL log queue operations and depth assignments
+3. WHEN discovery processing occurs, THE NetWalker SHALL log device processing status and neighbor extraction
+4. WHEN Unicode characters cause logging issues, THE NetWalker SHALL use plain text alternatives for file compatibility
+5. WHEN log files are written, THE NetWalker SHALL ensure cross-platform compatibility for special characters
+
+### Requirement 15: NEXUS Device Discovery Enhancement
+
+**User Story:** As a network administrator, I want reliable discovery of NEXUS devices and proper neighbor extraction, so that I can map complete network topologies including data center infrastructure.
+
+#### Acceptance Criteria
+
+1. WHEN connecting to NEXUS devices, THE NetWalker SHALL properly extract device hostnames using NX-OS specific patterns
+2. WHEN processing NEXUS device neighbors, THE NetWalker SHALL correctly parse both CDP and LLDP neighbor information
+3. WHEN NEXUS devices are discovered, THE NetWalker SHALL ensure they are not incorrectly filtered by platform or capability checks
+4. WHEN neighbor processing occurs, THE NetWalker SHALL validate that discovered neighbors are properly added to the discovery queue
+5. WHEN NEXUS devices have complex interface names, THE NetWalker SHALL correctly parse and normalize interface information

@@ -42,22 +42,12 @@ class OutputManager:
             config.get('logs_directory', './logs')
         )
         
-        # Additional output directories
-        self.temp_directory = self._normalize_path(
-            config.get('temp_directory', './temp')
-        )
-        self.backup_directory = self._normalize_path(
-            config.get('backup_directory', './backup')
-        )
-        
         # Create directories
         self._create_directories()
         
         logger.info(f"OutputManager initialized:")
         logger.info(f"  Reports: {self.reports_directory}")
         logger.info(f"  Logs: {self.logs_directory}")
-        logger.info(f"  Temp: {self.temp_directory}")
-        logger.info(f"  Backup: {self.backup_directory}")
     
     def _normalize_path(self, path: str) -> str:
         """
@@ -81,9 +71,7 @@ class OutputManager:
         """Create all configured directories if they don't exist"""
         directories = [
             ('reports', self.reports_directory),
-            ('logs', self.logs_directory),
-            ('temp', self.temp_directory),
-            ('backup', self.backup_directory)
+            ('logs', self.logs_directory)
         ]
         
         for dir_type, dir_path in directories:
@@ -101,14 +89,6 @@ class OutputManager:
     def get_logs_directory(self) -> str:
         """Get the logs directory path"""
         return self.logs_directory
-    
-    def get_temp_directory(self) -> str:
-        """Get the temporary files directory path"""
-        return self.temp_directory
-    
-    def get_backup_directory(self) -> str:
-        """Get the backup directory path"""
-        return self.backup_directory
     
     def get_report_filepath(self, filename: str) -> str:
         """
@@ -133,30 +113,6 @@ class OutputManager:
             Full path to log file
         """
         return os.path.join(self.logs_directory, filename)
-    
-    def get_temp_filepath(self, filename: str) -> str:
-        """
-        Get full path for a temporary file.
-        
-        Args:
-            filename: Temporary filename
-            
-        Returns:
-            Full path to temporary file
-        """
-        return os.path.join(self.temp_directory, filename)
-    
-    def get_backup_filepath(self, filename: str) -> str:
-        """
-        Get full path for a backup file.
-        
-        Args:
-            filename: Backup filename
-            
-        Returns:
-            Full path to backup file
-        """
-        return os.path.join(self.backup_directory, filename)
     
     def create_timestamped_filename(self, base_name: str, extension: str = "txt") -> str:
         """
@@ -214,39 +170,6 @@ class OutputManager:
             logger.error(f"Failed to create directory {directory_path}: {e}")
             raise
     
-    def cleanup_temp_files(self, max_age_hours: int = 24):
-        """
-        Clean up temporary files older than specified age.
-        
-        Args:
-            max_age_hours: Maximum age of files to keep (in hours)
-        """
-        try:
-            temp_path = Path(self.temp_directory)
-            if not temp_path.exists():
-                return
-            
-            current_time = datetime.now()
-            cutoff_time = current_time.timestamp() - (max_age_hours * 3600)
-            
-            cleaned_count = 0
-            for file_path in temp_path.iterdir():
-                if file_path.is_file():
-                    file_age = file_path.stat().st_mtime
-                    if file_age < cutoff_time:
-                        try:
-                            file_path.unlink()
-                            cleaned_count += 1
-                            logger.debug(f"Cleaned up temp file: {file_path}")
-                        except Exception as e:
-                            logger.warning(f"Failed to delete temp file {file_path}: {e}")
-            
-            if cleaned_count > 0:
-                logger.info(f"Cleaned up {cleaned_count} temporary files older than {max_age_hours} hours")
-                
-        except Exception as e:
-            logger.error(f"Error during temp file cleanup: {e}")
-    
     def get_directory_info(self) -> Dict[str, Dict[str, Any]]:
         """
         Get information about all managed directories.
@@ -256,9 +179,7 @@ class OutputManager:
         """
         directories = {
             'reports': self.reports_directory,
-            'logs': self.logs_directory,
-            'temp': self.temp_directory,
-            'backup': self.backup_directory
+            'logs': self.logs_directory
         }
         
         info = {}
@@ -282,8 +203,7 @@ class OutputManager:
         """
         try:
             # Check if all directories can be created/accessed
-            for directory in [self.reports_directory, self.logs_directory, 
-                            self.temp_directory, self.backup_directory]:
+            for directory in [self.reports_directory, self.logs_directory]:
                 path_obj = Path(directory)
                 
                 # Try to create if it doesn't exist

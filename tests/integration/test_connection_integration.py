@@ -95,7 +95,7 @@ def test_end_to_end_configuration_flow():
     # 4. Verify everything is properly configured
     assert connection_manager is not None
     assert credentials is not None
-    assert config['discovery'].max_depth == 10  # Default value
+    assert config['discovery'].max_depth == 1  # Default value
     assert config['exclusions'].exclude_hostnames == ['LUMT*', 'LUMV*']  # Default exclusions
     
     # Clean up

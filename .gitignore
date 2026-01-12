@@ -68,3 +68,4 @@ prodtest_files/
 # Local configuration overrides
 local_*.ini
 dev_*.ini
+/net-commander

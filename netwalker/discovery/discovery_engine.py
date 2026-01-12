@@ -86,6 +86,9 @@ class DeviceInventory:
             status: Device status (discovered, connected, failed, filtered, boundary)
             error: Error message if status is failed
         """
+        logger.info(f"[INVENTORY ADD] Adding device {device_key} with status '{status}' to inventory")
+        logger.info(f"  Current inventory size: {len(self._devices)} devices")
+        
         self._devices[device_key] = device_info
         self._device_status[device_key] = status
         
@@ -104,6 +107,7 @@ class DeviceInventory:
         
         self._discovery_stats['total_discovered'] = len(self._devices)
         
+        logger.info(f"[INVENTORY UPDATED] Device {device_key} added successfully. New inventory size: {len(self._devices)}")
         logger.debug(f"Added device {device_key} with status {status}")
     
     def get_device(self, device_key: str) -> Optional[Dict[str, Any]]:
@@ -147,6 +151,7 @@ class DiscoveryEngine:
     - Error isolation and continuation
     - Device filtering and boundary management
     - Comprehensive status tracking and reporting
+    - Dynamic timeout reset for large network discovery
     """
     
     def __init__(self, connection_manager: ConnectionManager, 
@@ -167,8 +172,9 @@ class DiscoveryEngine:
         self.credentials = credentials
         
         # Discovery configuration
-        self.max_depth = config.get('max_discovery_depth', 5)
+        self.max_depth = config.get('max_discovery_depth', 1)
         self.discovery_timeout = config.get('discovery_timeout_seconds', 300)
+        self.initial_discovery_timeout = self.discovery_timeout  # Store original timeout
         
         # Initialize components
         self.protocol_parser = ProtocolParser()
@@ -179,6 +185,16 @@ class DiscoveryEngine:
         self.discovery_queue: deque[DiscoveryNode] = deque()
         self.discovered_devices: Set[str] = set()
         self.failed_devices: Set[str] = set()
+        
+        # Progress tracking
+        self.total_devices_discovered = 0
+        self.devices_processed = 0
+        self.progress_enabled = config.get('enable_progress_tracking', True)
+        
+        # Timeout management for large networks
+        self.discovery_start_time: Optional[float] = None
+        self.timeout_resets: int = 0
+        self.devices_added_since_reset: int = 0
         
         logger.info(f"DiscoveryEngine initialized with max_depth={self.max_depth}, "
                    f"timeout={self.discovery_timeout}s")
@@ -200,7 +216,9 @@ class DiscoveryEngine:
         )
         
         self.discovery_queue.append(seed_node)
+        self.total_devices_discovered += 1
         logger.info(f"Added seed device: {seed_node.device_key}")
+        self._update_progress_display()
     
     def discover_topology(self) -> Dict[str, Any]:
         """
@@ -209,38 +227,59 @@ class DiscoveryEngine:
         Returns:
             Discovery results summary
         """
-        start_time = time.time()
+        self.discovery_start_time = time.time()
         logger.info("Starting network topology discovery")
         
         try:
-            while self.discovery_queue and (time.time() - start_time) < self.discovery_timeout:
+            logger.info(f"[DISCOVERY LOOP] Starting discovery with {len(self.discovery_queue)} devices in queue")
+            
+            while self.discovery_queue:
+                current_time = time.time()
+                elapsed_time = current_time - self.discovery_start_time
+                
+                # Check if we've exceeded the discovery timeout
+                if elapsed_time >= self.discovery_timeout:
+                    logger.warning(f"Discovery timeout reached after {elapsed_time:.2f}s (limit: {self.discovery_timeout}s)")
+                    logger.info(f"Timeout resets performed: {self.timeout_resets}")
+                    break
+                
                 current_node = self.discovery_queue.popleft()
+                
+                logger.info(f"[QUEUE] Processing device {current_node.device_key} from queue (depth {current_node.depth})")
+                logger.info(f"  Queue remaining: {len(self.discovery_queue)} devices")
+                logger.info(f"  Elapsed time: {elapsed_time:.2f}s / {self.discovery_timeout}s")
                 
                 # Skip if already discovered
                 if current_node.device_key in self.discovered_devices:
+                    logger.info(f"  [SKIPPED] {current_node.device_key} already discovered")
                     continue
                 
                 # Check depth limit
                 if current_node.depth > self.max_depth:
-                    logger.debug(f"Skipping {current_node.device_key} - depth limit exceeded")
+                    logger.info(f"  [DEPTH LIMIT] Skipping {current_node.device_key} - depth {current_node.depth} exceeds max_depth {self.max_depth}")
                     continue
                 
                 # Discover device
                 self._discover_device(current_node)
+                
+                # Update progress after processing device
+                self.devices_processed += 1
+                self._update_progress_display()
             
-            # Handle timeout
-            if (time.time() - start_time) >= self.discovery_timeout:
-                logger.warning(f"Discovery timeout reached after {self.discovery_timeout}s")
+            # Handle completion
+            if not self.discovery_queue:
+                logger.info(f"[DISCOVERY COMPLETE] Queue empty - all devices processed")
             
         except Exception as e:
             logger.error(f"Discovery engine error: {e}")
             raise
         
-        discovery_time = time.time() - start_time
+        discovery_time = time.time() - self.discovery_start_time
         results = self._generate_discovery_summary(discovery_time)
         
         logger.info(f"Discovery completed in {discovery_time:.2f}s - "
-                   f"Found {results['total_devices']} devices")
+                   f"Found {results['total_devices']} devices, "
+                   f"Timeout resets: {self.timeout_resets}")
         
         return results
     
@@ -252,39 +291,104 @@ class DiscoveryEngine:
             node: Discovery node to process
         """
         device_key = node.device_key
-        logger.debug(f"Discovering device {device_key} at depth {node.depth}")
+        logger.info(f"[DISCOVERY DECISION] Processing device {device_key} at depth {node.depth}")
+        logger.info(f"  Device details: hostname='{node.hostname}', ip='{node.ip_address}', parent='{node.parent_device}'")
+        logger.info(f"  Discovery state: discovered_devices={len(self.discovered_devices)}, queue_size={len(self.discovery_queue)}")
+        
+        # Special debugging for LUMT-CORE-A and similar NEXUS devices
+        if 'LUMT' in node.hostname.upper() or 'CORE' in node.hostname.upper():
+            self._debug_nexus_device_processing(node)
         
         try:
+            # Check if already in discovered set (this should not happen if queue logic is correct)
+            if device_key in self.discovered_devices:
+                logger.warning(f"  [ALREADY DISCOVERED] Device {device_key} is already in discovered_devices set - this should not happen!")
+                logger.warning(f"    Discovered devices: {list(self.discovered_devices)}")
+                return
+            
             # Mark as discovered to prevent loops
             self.discovered_devices.add(device_key)
+            logger.info(f"  [MARKED DISCOVERED] Added {device_key} to discovered_devices set")
             
             # Check if device should be filtered
+            logger.info(f"  [CHECKING] if device {device_key} should be filtered...")
+            # For initial device discovery, we only have hostname and IP
+            # Platform and capabilities will be checked during neighbor processing
             if self.filter_manager.should_filter_device(node.hostname, node.ip_address):
-                logger.info(f"Device {device_key} filtered - marking as boundary")
+                logger.info(f"  [FILTERED] Device {device_key} will be marked as boundary (not discovered)")
                 self.filter_manager.mark_as_boundary(node.hostname, node.ip_address, "Filtered device")
                 
                 # Add to inventory as filtered
                 device_info = self._create_basic_device_info(node, "filtered")
                 self.inventory.add_device(device_key, device_info, "filtered")
+                logger.info(f"  [INVENTORY] Added {device_key} to inventory as FILTERED")
                 return
             
+            logger.info(f"  [NOT FILTERED] Device {device_key} passed initial filtering - proceeding with connection")
+            
             # Attempt connection and discovery
+            logger.info(f"  [CONNECTING] Attempting connection to {device_key}")
             discovery_result = self._connect_and_discover(node)
             
             if discovery_result.success:
+                logger.info(f"  [SUCCESS] Connected to {device_key} - adding to inventory and processing neighbors")
+                
+                # Now we have platform and capabilities, do a full filter check
+                device_platform = discovery_result.device_info.get('platform')
+                device_capabilities = discovery_result.device_info.get('capabilities', [])
+                
+                logger.info(f"  [FULL FILTER CHECK] Re-evaluating {device_key} with complete device info")
+                logger.info(f"    Platform: {device_platform}, Capabilities: {device_capabilities}")
+                
+                if self.filter_manager.should_filter_device(
+                    node.hostname, node.ip_address, device_platform, device_capabilities
+                ):
+                    logger.info(f"  [FILTERED AFTER CONNECTION] Device {device_key} filtered based on platform/capabilities")
+                    self.filter_manager.mark_as_boundary(
+                        node.hostname, node.ip_address, 
+                        f"Filtered after connection - platform: {device_platform}, capabilities: {device_capabilities}"
+                    )
+                    
+                    # Add to inventory as filtered
+                    device_info = self._create_basic_device_info(node, "filtered")
+                    device_info.update({
+                        'platform': device_platform,
+                        'capabilities': device_capabilities,
+                        'filter_reason': 'Filtered after connection based on platform/capabilities'
+                    })
+                    self.inventory.add_device(device_key, device_info, "filtered")
+                    logger.info(f"  [INVENTORY] Added {device_key} to inventory as FILTERED (post-connection)")
+                    return
+                
+                logger.info(f"  [PASSED FULL FILTER] Device {device_key} passed complete filtering - adding to inventory")
+                
                 # Add device to inventory
                 self.inventory.add_device(
                     device_key, 
                     discovery_result.device_info, 
                     "connected"
                 )
+                logger.info(f"  [INVENTORY] Added {device_key} to inventory as CONNECTED")
                 
                 # Process neighbors for further discovery
+                logger.info(f"  [PROCESSING NEIGHBORS] Evaluating neighbors of {device_key}")
+                
+                # Special debugging for NEXUS devices
+                if 'LUMT' in node.hostname.upper() or 'CORE' in node.hostname.upper():
+                    self._debug_nexus_neighbor_processing(node, discovery_result.neighbors)
+                
                 self._process_neighbors(discovery_result.neighbors, node)
                 
             else:
                 # Record failed device
+                logger.info(f"  [CONNECTION FAILED] Could not connect to {device_key} - {discovery_result.error_message}")
                 self.failed_devices.add(device_key)
+                
+                # Add to inventory as failed
+                device_info = self._create_basic_device_info(node, "failed")
+                device_info['error_message'] = discovery_result.error_message
+                self.inventory.add_device(device_key, device_info, "failed")
+                logger.info(f"  [INVENTORY] Added {device_key} to inventory as FAILED")
                 device_info = self._create_basic_device_info(node, "failed")
                 device_info['error_message'] = discovery_result.error_message
                 
@@ -305,6 +409,69 @@ class DiscoveryEngine:
             device_info = self._create_basic_device_info(node, "error")
             device_info['error_message'] = str(e)
             self.inventory.add_device(device_key, device_info, "failed", str(e))
+    
+    def _debug_nexus_device_processing(self, node: DiscoveryNode):
+        """
+        Special debugging for NEXUS devices like LUMT-CORE-A
+        
+        Args:
+            node: Discovery node for NEXUS device
+        """
+        logger.info(f"[NEXUS DEBUG] Processing NEXUS device: {node.device_key}")
+        logger.info(f"  [NEXUS DEBUG] Hostname: '{node.hostname}'")
+        logger.info(f"  [NEXUS DEBUG] IP Address: '{node.ip_address}'")
+        logger.info(f"  [NEXUS DEBUG] Depth: {node.depth}")
+        logger.info(f"  [NEXUS DEBUG] Parent: '{node.parent_device}'")
+        logger.info(f"  [NEXUS DEBUG] Discovery method: '{node.discovery_method}'")
+        
+        # Check current filter configuration
+        filter_criteria = self.filter_manager.criteria
+        logger.info(f"  [NEXUS DEBUG] Current filter criteria:")
+        logger.info(f"    Hostname excludes: {filter_criteria.hostname_excludes}")
+        logger.info(f"    IP excludes: {filter_criteria.ip_excludes}")
+        logger.info(f"    Platform excludes: {filter_criteria.platform_excludes}")
+        logger.info(f"    Capability excludes: {filter_criteria.capability_excludes}")
+    
+    def _debug_nexus_neighbor_processing(self, node: DiscoveryNode, neighbors: List[Any]):
+        """
+        Special debugging for NEXUS neighbor processing
+        
+        Args:
+            node: Parent NEXUS device node
+            neighbors: List of discovered neighbors
+        """
+        logger.info(f"[NEXUS NEIGHBOR DEBUG] Processing {len(neighbors)} neighbors for {node.device_key}")
+        
+        for i, neighbor in enumerate(neighbors):
+            if hasattr(neighbor, 'device_id'):
+                neighbor_id = getattr(neighbor, 'device_id', 'Unknown')
+                neighbor_ip = getattr(neighbor, 'ip_address', 'Unknown')
+                neighbor_platform = getattr(neighbor, 'platform', 'Unknown')
+                neighbor_capabilities = getattr(neighbor, 'capabilities', [])
+                protocol = getattr(neighbor, 'protocol', 'Unknown')
+            else:
+                neighbor_id = neighbor.get('hostname', 'Unknown')
+                neighbor_ip = neighbor.get('ip_address', 'Unknown')
+                neighbor_platform = neighbor.get('platform', 'Unknown')
+                neighbor_capabilities = neighbor.get('capabilities', [])
+                protocol = neighbor.get('protocol', 'Unknown')
+            
+            logger.info(f"  [NEXUS NEIGHBOR DEBUG] Neighbor {i+1}: {neighbor_id}")
+            logger.info(f"    IP: {neighbor_ip}")
+            logger.info(f"    Platform: {neighbor_platform}")
+            logger.info(f"    Capabilities: {neighbor_capabilities}")
+            logger.info(f"    Protocol: {protocol}")
+            
+            # Check if this neighbor would be filtered
+            would_filter = self.filter_manager.should_filter_device(
+                neighbor_id, neighbor_ip, neighbor_platform, neighbor_capabilities
+            )
+            logger.info(f"    Would be filtered: {would_filter}")
+            
+            if would_filter:
+                logger.warning(f"    [NEXUS NEIGHBOR DEBUG] Neighbor {neighbor_id} will be filtered!")
+            else:
+                logger.info(f"    [NEXUS NEIGHBOR DEBUG] Neighbor {neighbor_id} will be queued for discovery")
     
     def _connect_and_discover(self, node: DiscoveryNode) -> DiscoveryResult:
         """
@@ -332,7 +499,7 @@ class DiscoveryEngine:
             
             # Collect device information
             device_info = self.device_collector.collect_device_information(
-                connection, node.hostname, connection_result.method.value, 
+                connection, node.ip_address, connection_result.method.value, 
                 node.depth, node.is_seed
             )
             
@@ -402,6 +569,8 @@ class DiscoveryEngine:
             neighbors: List of neighbor information (NeighborInfo objects or dictionaries)
             parent_node: Parent device node
         """
+        new_devices_added = 0
+        
         for neighbor in neighbors:
             # Handle both NeighborInfo objects and dictionaries
             if hasattr(neighbor, 'device_id'):
@@ -435,11 +604,14 @@ class DiscoveryEngine:
                 continue
             
             # Check if neighbor should be filtered based on platform/capabilities
+            logger.info(f"    [NEIGHBOR DECISION] Evaluating neighbor {neighbor_hostname}:{neighbor_ip}")
+            logger.info(f"      Neighbor details: platform='{neighbor_platform}', capabilities={neighbor_capabilities}")
+            
             if self.filter_manager.should_filter_device(
                 neighbor_hostname, neighbor_ip, neighbor_platform, neighbor_capabilities
             ):
-                logger.info(f"Neighbor {neighbor_hostname}:{neighbor_ip} filtered by platform/capabilities - "
-                           f"platform: {neighbor_platform}, capabilities: {neighbor_capabilities}")
+                logger.info(f"    [NEIGHBOR FILTERED] {neighbor_hostname}:{neighbor_ip} will not be added to discovery queue")
+                logger.info(f"      Reason: platform='{neighbor_platform}', capabilities={neighbor_capabilities}")
                 self.filter_manager.mark_as_boundary(
                     neighbor_hostname, neighbor_ip, 
                     f"Filtered by platform ({neighbor_platform}) or capabilities ({neighbor_capabilities})"
@@ -454,6 +626,8 @@ class DiscoveryEngine:
                 self.inventory.add_device(f"{neighbor_hostname}:{neighbor_ip}", device_info, "filtered")
                 continue
             
+            logger.info(f"    [NEIGHBOR PASSED] {neighbor_hostname}:{neighbor_ip} passed filtering checks")
+            
             # Create neighbor node
             neighbor_node = DiscoveryNode(
                 hostname=neighbor_hostname,
@@ -463,15 +637,104 @@ class DiscoveryEngine:
                 discovery_method=protocol
             )
             
+            logger.info(f"    [NEIGHBOR CHECK] Checking if {neighbor_node.device_key} should be queued")
+            logger.info(f"      Current discovered_devices: {list(self.discovered_devices)}")
+            logger.info(f"      Current queue devices: {[n.device_key for n in self.discovery_queue]}")
+            
             # Skip if already discovered or queued
-            if (neighbor_node.device_key in self.discovered_devices or 
-                any(n.device_key == neighbor_node.device_key for n in self.discovery_queue)):
+            if neighbor_node.device_key in self.discovered_devices:
+                logger.info(f"    [NEIGHBOR SKIPPED] {neighbor_node.device_key} already in discovered_devices set")
+                continue
+            
+            if any(n.device_key == neighbor_node.device_key for n in self.discovery_queue):
+                logger.info(f"    [NEIGHBOR SKIPPED] {neighbor_node.device_key} already in discovery queue")
+                continue
+            
+            # Check depth limit
+            if neighbor_node.depth > self.max_depth:
+                logger.info(f"    [NEIGHBOR DEPTH LIMIT] {neighbor_node.device_key} at depth {neighbor_node.depth} exceeds max_depth {self.max_depth}")
                 continue
             
             # Add to discovery queue
             self.discovery_queue.append(neighbor_node)
+            new_devices_added += 1
+            self.total_devices_discovered += 1
+            logger.info(f"    [NEIGHBOR QUEUED] Added {neighbor_node.device_key} to discovery queue (depth {neighbor_node.depth})")
+            logger.info(f"      Queue size after addition: {len(self.discovery_queue)}")
             logger.debug(f"Added neighbor {neighbor_node.device_key} to discovery queue "
                         f"(depth {neighbor_node.depth})")
+        
+        # Reset discovery timeout if new devices were added (for large networks)
+        if new_devices_added > 0:
+            self._reset_discovery_timeout_if_needed(new_devices_added)
+            self._update_progress_display()
+    
+    def _reset_discovery_timeout_if_needed(self, new_devices_count: int):
+        """
+        Reset discovery timeout when new devices are added to handle large networks.
+        
+        Args:
+            new_devices_count: Number of new devices added to queue
+        """
+        if self.discovery_start_time is None:
+            return
+        
+        current_time = time.time()
+        elapsed_time = current_time - self.discovery_start_time
+        remaining_time = self.discovery_timeout - elapsed_time
+        
+        # Reset timeout if we're getting close to the limit and have new devices to process
+        # This prevents large networks from being cut off prematurely
+        if remaining_time < (self.initial_discovery_timeout * 0.2):  # Less than 20% time remaining
+            self.timeout_resets += 1
+            self.devices_added_since_reset += new_devices_count
+            
+            # Reset the start time to give us more time for the new devices
+            # But don't reset indefinitely - limit to reasonable number of resets
+            if self.timeout_resets <= 10:  # Maximum 10 resets to prevent infinite discovery
+                self.discovery_start_time = current_time
+                logger.info(f"[TIMEOUT RESET] Discovery timeout reset #{self.timeout_resets}")
+                logger.info(f"  Reason: {new_devices_count} new devices added, {remaining_time:.1f}s remaining")
+                logger.info(f"  Total devices added since last reset: {self.devices_added_since_reset}")
+                logger.info(f"  New timeout window: {self.discovery_timeout}s from now")
+                
+                # Reset the counter for next cycle
+                self.devices_added_since_reset = 0
+            else:
+                logger.warning(f"[TIMEOUT RESET LIMIT] Maximum timeout resets ({10}) reached - no more resets allowed")
+                logger.warning(f"  This prevents infinite discovery loops in very large networks")
+        else:
+            logger.debug(f"[TIMEOUT CHECK] No reset needed - {remaining_time:.1f}s remaining, {new_devices_count} devices added")
+    
+    def _update_progress_display(self):
+        """
+        Update and display discovery progress information.
+        Shows current progress with device count and percentage completion.
+        """
+        if not self.progress_enabled:
+            return
+        
+        queue_size = len(self.discovery_queue)
+        
+        if self.total_devices_discovered > 0:
+            percentage = (self.devices_processed / self.total_devices_discovered) * 100
+            
+            # Create progress message
+            progress_msg = (f"[PROGRESS] Processing device {self.devices_processed} of "
+                          f"{self.total_devices_discovered} ({percentage:.1f}% complete) - "
+                          f"Queue: {queue_size} remaining")
+            
+            # Log to file
+            logger.info(progress_msg)
+            
+            # Also print directly to console for immediate visibility
+            print(progress_msg)
+        else:
+            # Initial state - just show queue size
+            if queue_size > 0:
+                initial_msg = f"[PROGRESS] Discovery starting - Queue: {queue_size} devices to process"
+                logger.info(initial_msg)
+                print(initial_msg)
     
     def _create_basic_device_info(self, node: DiscoveryNode, status: str) -> Dict[str, Any]:
         """Create basic device info for failed/filtered devices"""
@@ -533,6 +796,8 @@ class DiscoveryEngine:
             'boundary_devices': stats['boundary_devices'],
             'max_depth_reached': max_depth,
             'devices_in_queue': len(self.discovery_queue),
+            'timeout_resets': self.timeout_resets,
+            'initial_timeout_seconds': self.initial_discovery_timeout,
             'filter_stats': self.filter_manager.get_filter_stats()
         }
     

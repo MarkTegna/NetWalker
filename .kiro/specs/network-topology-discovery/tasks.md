@@ -5,7 +5,7 @@
 This implementation plan breaks down the NetWalker Tool development into discrete, manageable coding tasks. The approach follows a modular architecture with incremental development, starting with core infrastructure and building up to complete functionality. Each task builds on previous work and includes comprehensive testing to ensure reliability.
 
 **Phase 1 (Initial Build)**: Core network discovery, Excel reporting, and basic functionality
-**Phase 2 (Future Enhancement)**: Microsoft Visio integration and DNS validation features
+**Phase 2 (Enhanced Features)**: Microsoft Visio integration and DNS validation features
 
 ## Tasks
 
@@ -196,6 +196,15 @@ This implementation plan breaks down the NetWalker Tool development into discret
     - **Property 15: Excel Formatting Standards**
     - **Validates: Requirements 5.4**
 
+  - [x] 10.4 Fix IP address display consistency in Excel reports
+    - Update _create_device_inventory_sheet method to use proper IP address fallback logic
+    - Ensure IP addresses are extracted from both 'primary_ip' and 'ip_address' fields
+    - _Requirements: 5.7_
+
+  - [x] 10.5 Write property test for IP address display consistency
+    - **Property 18: IP Address Display Consistency**
+    - **Validates: Requirements 5.7**
+
   - [x] 10.4 Write property test for timestamp file naming
     - **Property 16: Timestamp-Based File Naming**
     - **Validates: Requirements 5.6, 12.5**
@@ -231,21 +240,20 @@ This implementation plan breaks down the NetWalker Tool development into discret
     - **Validates: Requirements 6.4**
 
 - [ ] 12. Implement DNS validation and address resolution
-  - [ ] 12.1 Create DNS Validator class
+  - [x] 12.1 Create DNS Validator class
     - Implement public IP address detection and resolution
     - Add forward and reverse DNS testing
     - Create DNS Excel report generation
     - Implement RFC1918 conflict resolution
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-  - [ ] 12.2 Write property test for public IP resolution
+  - [x] 12.2 Write property test for public IP resolution
     - **Property 25: Public IP Address Resolution**
     - **Validates: Requirements 9.1**
 
-  - [ ] 12.3 Write property test for DNS validation completeness
+  - [x] 12.3 Write property test for DNS validation completeness
     - **Property 26: DNS Validation Completeness**
     - **Validates: Requirements 9.2**
--->
 
 - [x] 11. Integrate all components and create main application
   - [x] 11.1 Create Output Manager class
@@ -285,7 +293,7 @@ This implementation plan breaks down the NetWalker Tool development into discret
     - Test error recovery and continuation
     - _Requirements: All requirements validation_
 
-- [ ] 14. Fix Windows TELNET compatibility issue
+- [x] 14. Fix Windows TELNET compatibility issue
   - [x] 14.1 Update Connection Manager for Windows-compatible TELNET transport
     - Modify _try_telnet_connection method to use paramiko transport instead of system transport
     - Add fallback logic for TELNET transport selection on Windows
@@ -301,28 +309,102 @@ This implementation plan breaks down the NetWalker Tool development into discret
     - Test with devices that require TELNET fallback (like CBS01711)
     - _Requirements: 2.2, 2.6_
 
-- [ ] 15. Create Windows executable distribution
-  - [x] 13.1 Set up PyInstaller for Windows executable creation
-    - Create executable build script
+- [x] 15. Create Windows executable distribution
+  - [x] 15.1 Set up PyInstaller for Windows executable creation
+    - Create executable build script with automated version increment
     - Include all supporting files and dependencies
     - Test executable on clean Windows system
     - _Requirements: Distribution requirements_
 
-  - [x] 13.2 Create ZIP distribution with version numbering
+  - [x] 15.2 Create ZIP distribution with version numbering
     - Package executable with supporting files
     - Use version number in ZIP filename
     - Include documentation and sample configuration files
+    - Copy ZIP files to Archive directory for version management
     - _Requirements: Distribution requirements_
 
-- [ ] 16. Final checkpoint - Complete system validation
-  - Ensure all tests pass, validate with real network environment, ask the user if questions arise.
+- [x] 16. Fix critical discovery and filtering issues
+  - [x] 16.1 Resolve NX-OS hostname extraction showing "kernel"
+    - Enhanced hostname extraction with platform-specific patterns
+    - Added filtering of system words like "kernel"
+    - Improved hardware model extraction for Cisco platforms
+    - _Requirements: 3.1, 11.4_
+
+  - [x] 16.2 Fix LUMT-CORE-A discovery depth and filtering problems
+    - Corrected hostname exclusions (LUMT*) and IP range exclusions (10.70.0.0/16)
+    - Fixed FilterManager configuration loading for structured and flat formats
+    - Set default max_depth=2 for proper discovery boundaries
+    - _Requirements: 4.1, 4.2, 1.5_
+
+  - [x] 16.3 Add enhanced discovery logging and fix Unicode encoding
+    - Added comprehensive logging to FilterManager and DiscoveryEngine
+    - Fixed Unicode encoding issues by replacing emoji with plain text markers
+    - Enhanced logging shows filtering decisions and queue processing
+    - _Requirements: 1.4, 8.6_
+
+  - [x] 16.4 Fix discovery timeout causing premature termination
+    - Added separate discovery_timeout field (300s) vs connection_timeout (30s)
+    - Fixed timeout mapping in configuration loading
+    - Ensured all queued devices process within discovery window
+    - _Requirements: 1.4, 10.1_
+
+- [x] 17. Final checkpoint - Complete system validation
+  - All core functionality implemented and tested with real network devices
+  - Major issues resolved: discovery timeout, filtering, hostname extraction, logging
+  - Build process automated with version management and distribution
+  - System validated in production environment
+
+- [ ] 18. Fix discovery timeout reset for large environments
+  - [ ] 18.1 Implement discovery timeout reset when adding devices to queue
+    - Modify _process_neighbors method to reset discovery timeout when new devices are queued
+    - Add logic to track when new devices are discovered vs duplicates
+    - Ensure timeout reset only occurs for non-duplicate devices to prevent infinite discovery
+    - Add logging to show when timeout is reset and why
+    - _Requirements: 13.6_
+
+  - [ ] 18.2 Write property test for timeout reset functionality
+    - **Property: Discovery timeout reset on new device addition**
+    - **Validates: Requirements 13.6**
+
+- [ ] 19. Enhance NEXUS device discovery and neighbor processing
+  - [ ] 19.1 Improve NEXUS device hostname extraction and neighbor parsing
+    - Enhance hostname extraction patterns for NX-OS devices
+    - Improve CDP/LLDP neighbor parsing for NEXUS-specific output formats
+    - Add validation that NEXUS devices are not incorrectly filtered
+    - Add enhanced logging for NEXUS device processing decisions
+    - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5_
+
+  - [ ] 19.2 Write property test for NEXUS device discovery
+    - **Property: NEXUS device discovery completeness**
+    - **Validates: Requirements 15.1, 15.2, 15.3**
+
+  - [ ] 19.3 Debug LUMT-CORE-A specific discovery issues
+    - Investigate why LUMT-CORE-A neighbors are not being processed
+    - Add specific logging for LUMT-CORE-A discovery path
+    - Validate that LUMT-CORE-A passes all filtering checks
+    - Test neighbor extraction and queue addition for LUMT-CORE-A
+    - _Requirements: 15.4_
+
+- [ ] 20. Final validation and testing
+  - [ ] 20.1 Test discovery timeout reset with large network simulation
+    - Create test scenario with hundreds of devices
+    - Verify timeout resets appropriately as new devices are discovered
+    - Ensure discovery completes for large networks without premature termination
+    - _Requirements: 13.6_
+
+  - [ ] 20.2 Test NEXUS device discovery with real NEXUS devices
+    - Validate LUMT-CORE-A and other NEXUS devices are properly discovered
+    - Verify neighbor extraction and queue processing works correctly
+    - Test with various NEXUS platforms (7K, 9K, etc.)
+    - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5_
 
 ## Notes
 
 - Phase 1 core functionality is complete with comprehensive property-based testing
-- Phase 2 features (Visio integration and DNS validation) are disabled for initial build
+- DNS validation features are now enabled for implementation
+- Visio integration remains disabled for initial build
 - All major components have been implemented and tested
-- Remaining tasks focus on distribution and final validation
+- Remaining tasks focus on DNS validation, distribution and final validation
 - Each task references specific requirements for traceability
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases

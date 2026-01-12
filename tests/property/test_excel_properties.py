@@ -91,33 +91,37 @@ class TestExcelReportGeneratorProperties:
             seed_devices = [f"{devices[0][0]}:{devices[0][1]}"] if devices else []
             
             # Generate report
-            filepath = generator.generate_discovery_report(inventory, discovery_results, seed_devices)
+            filepaths = generator.generate_discovery_report(inventory, discovery_results, seed_devices)
             
-            # Property: File should be created
-            assert os.path.exists(filepath), "Excel file should be created"
+            # Property: Files should be created
+            assert len(filepaths) > 0, "At least one Excel file should be created"
+            main_filepath = filepaths[0]  # First file is the main discovery report
+            assert os.path.exists(main_filepath), "Main Excel file should be created"
             
             # Property: File should be a valid Excel workbook
-            workbook = load_workbook(filepath)
+            workbook = load_workbook(main_filepath)
             
-            # Property: Required sheets should exist
-            sheet_names = workbook.sheetnames
-            required_sheets = ["Discovery Summary", "Device Inventory", "Network Connections"]
-            
-            for required_sheet in required_sheets:
-                assert required_sheet in sheet_names, f"Sheet '{required_sheet}' should exist"
-            
-            # Property: Device Inventory sheet should contain all devices
-            device_sheet = workbook["Device Inventory"]
-            
-            # Count data rows (excluding header)
-            data_rows = 0
-            for row in device_sheet.iter_rows(min_row=2):
-                if row[0].value:  # If first column has value
-                    data_rows += 1
-            
-            assert data_rows == len(devices), f"Should have {len(devices)} device rows, found {data_rows}"
-            
-            workbook.close()
+            try:
+                # Property: Required sheets should exist
+                sheet_names = workbook.sheetnames
+                required_sheets = ["Discovery Summary", "Device Inventory", "Network Connections"]
+                
+                for required_sheet in required_sheets:
+                    assert required_sheet in sheet_names, f"Sheet '{required_sheet}' should exist"
+                
+                # Property: Device Inventory sheet should contain all devices
+                device_sheet = workbook["Device Inventory"]
+                
+                # Count data rows (excluding header)
+                data_rows = 0
+                for row in device_sheet.iter_rows(min_row=2):
+                    if row[0].value:  # If first column has value
+                        data_rows += 1
+                
+                assert data_rows == len(devices), f"Should have {len(devices)} device rows, found {data_rows}"
+                
+            finally:
+                workbook.close()
     
     @given(
         base_name=st.text(min_size=1, max_size=20, alphabet=st.characters(whitelist_categories=('Lu', 'Ll', 'Nd', 'Pc'))),
@@ -183,31 +187,37 @@ class TestExcelReportGeneratorProperties:
             seed_devices = [f"{devices[0][0]}:{devices[0][1]}"] if devices else []
             
             # Generate report
-            filepath = generator.generate_discovery_report(inventory, discovery_results, seed_devices)
+            filepaths = generator.generate_discovery_report(inventory, discovery_results, seed_devices)
+            
+            # Property: Files should be created
+            assert len(filepaths) > 0, "At least one Excel file should be created"
+            main_filepath = filepaths[0]  # First file is the main discovery report
             
             # Load and check formatting
-            workbook = load_workbook(filepath)
+            workbook = load_workbook(main_filepath)
             
-            # Check Device Inventory sheet formatting
-            device_sheet = workbook["Device Inventory"]
-            
-            # Property: Headers should be in row 1
-            header_row = list(device_sheet.iter_rows(min_row=1, max_row=1))[0]
-            
-            for cell in header_row:
-                if cell.value:  # If cell has content
-                    # Property: Header cells should have bold font
-                    assert cell.font.bold, f"Header cell {cell.coordinate} should be bold"
+            try:
+                # Check Device Inventory sheet formatting
+                device_sheet = workbook["Device Inventory"]
+                
+                # Property: Headers should be in row 1
+                header_row = list(device_sheet.iter_rows(min_row=1, max_row=1))[0]
+                
+                for cell in header_row:
+                    if cell.value:  # If cell has content
+                        # Property: Header cells should have bold font
+                        assert cell.font.bold, f"Header cell {cell.coordinate} should be bold"
+                        
+                        # Property: Header cells should have fill color
+                        assert cell.fill.start_color.rgb, f"Header cell {cell.coordinate} should have background color"
+                
+                # Property: Columns should be auto-sized (width > 0)
+                for column_letter in ['A', 'B', 'C', 'D']:
+                    width = device_sheet.column_dimensions[column_letter].width
+                    assert width > 0, f"Column {column_letter} should have width > 0"
                     
-                    # Property: Header cells should have fill color
-                    assert cell.fill.start_color.rgb, f"Header cell {cell.coordinate} should have background color"
-            
-            # Property: Columns should be auto-sized (width > 0)
-            for column_letter in ['A', 'B', 'C', 'D']:
-                width = device_sheet.column_dimensions[column_letter].width
-                assert width > 0, f"Column {column_letter} should have width > 0"
-            
-            workbook.close()
+            finally:
+                workbook.close()
     
     def test_master_inventory_generation_property(self):
         """
@@ -239,21 +249,28 @@ class TestExcelReportGeneratorProperties:
             # Load and verify content
             workbook = load_workbook(filepath)
             
-            # Property: Master inventory sheet should exist
-            assert "Master Device Inventory" in workbook.sheetnames
-            
-            master_sheet = workbook["Master Device Inventory"]
-            
-            # Count unique devices (device2 appears in both inventories)
-            unique_devices = set()
-            for row in master_sheet.iter_rows(min_row=2):
-                if row[0].value:  # Device key column
-                    unique_devices.add(row[0].value)
-            
-            # Property: Should have 3 unique devices (device1, device2, device3)
-            assert len(unique_devices) == 3, f"Should have 3 unique devices, found {len(unique_devices)}"
-            
-            workbook.close()
+            try:
+                # Property: Master inventory sheet should exist
+                assert "Master Device Inventory" in workbook.sheetnames
+                
+                master_sheet = workbook["Master Device Inventory"]
+                
+                # Count unique devices (device2 appears in both inventories)
+                unique_devices = set()
+                for row in master_sheet.iter_rows(min_row=2):
+                    if row[0].value:  # Device key column
+                        unique_devices.add(row[0].value)
+                
+                # Property: Should have 3 unique devices (device1, device2, device3)
+                assert len(unique_devices) == 3, f"Should have 3 unique devices, found {len(unique_devices)}"
+                
+            finally:
+                workbook.close()
+                # Additional cleanup for Windows file locking
+                import gc
+                import time
+                gc.collect()
+                time.sleep(0.2)  # Longer delay for Windows
     
     def test_output_directory_creation_property(self):
         """
@@ -273,6 +290,65 @@ class TestExcelReportGeneratorProperties:
             # Property: Directory should be created
             assert os.path.exists(reports_dir), "Reports directory should be created"
             assert os.path.isdir(reports_dir), "Reports path should be a directory"
+    
+    @given(
+        ip_field_type=st.sampled_from(['primary_ip', 'ip_address', 'device_key_only']),
+        ip_address=st.ip_addresses(v=4).map(str),
+        hostname=st.text(min_size=1, max_size=10, alphabet=st.characters(whitelist_categories=('Lu', 'Ll', 'Nd')))
+    )
+    def test_ip_address_display_consistency_property(self, ip_field_type, ip_address, hostname):
+        """
+        Property 18: IP Address Display Consistency
+        
+        IP addresses should be consistently extracted from both 'primary_ip' and 'ip_address' 
+        fields with device_key fallback, and should validate that extracted values are actual IP addresses.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self.create_test_config(temp_dir)
+            generator = ExcelReportGenerator(config)
+            
+            # Create device info with different IP field configurations
+            device_key = f"{hostname}:{ip_address}"
+            device_info = {
+                'hostname': hostname,
+                'platform': 'IOS',
+                'software_version': 'Version 1.0',
+                'status': 'connected'
+            }
+            
+            # Configure IP field based on test parameter
+            if ip_field_type == 'primary_ip':
+                device_info['primary_ip'] = ip_address
+            elif ip_field_type == 'ip_address':
+                device_info['ip_address'] = ip_address
+            # For 'device_key_only', don't add IP fields - rely on device_key parsing
+            
+            # Test IP extraction
+            extracted_ip = generator._extract_ip_address(device_key, device_info)
+            
+            # Property: Should always extract the correct IP address
+            assert extracted_ip == ip_address, f"Should extract IP {ip_address}, got {extracted_ip}"
+            
+            # Property: Should handle missing IP fields gracefully
+            empty_device_info = {'hostname': hostname, 'platform': 'IOS'}
+            extracted_from_key = generator._extract_ip_address(device_key, empty_device_info)
+            assert extracted_from_key == ip_address, f"Should extract IP from device_key when fields missing"
+            
+            # Property: primary_ip should take precedence over ip_address
+            device_info_both = {
+                'hostname': hostname,
+                'primary_ip': ip_address,
+                'ip_address': '10.0.0.99',  # Different IP
+                'platform': 'IOS'
+            }
+            extracted_precedence = generator._extract_ip_address(device_key, device_info_both)
+            assert extracted_precedence == ip_address, "primary_ip should take precedence over ip_address"
+            
+            # Property: Should reject invalid IP addresses (hostnames)
+            invalid_device_key = f"{hostname}:{hostname}"  # hostname in IP position
+            invalid_device_info = {'hostname': hostname, 'platform': 'IOS'}
+            extracted_invalid = generator._extract_ip_address(invalid_device_key, invalid_device_info)
+            assert extracted_invalid == '', "Should return empty string for invalid IP addresses"
     
     @given(
         num_devices=st.integers(min_value=0, max_value=3)
@@ -302,15 +378,19 @@ class TestExcelReportGeneratorProperties:
             
             # Property: Should not raise exception even with empty data
             try:
-                filepath = generator.generate_discovery_report(inventory, discovery_results, seed_devices)
+                filepaths = generator.generate_discovery_report(inventory, discovery_results, seed_devices)
                 
-                # Property: File should still be created
-                assert os.path.exists(filepath), "Excel file should be created even with minimal data"
+                # Property: Files should still be created
+                assert len(filepaths) > 0, "At least one Excel file should be created even with minimal data"
+                main_filepath = filepaths[0]
+                assert os.path.exists(main_filepath), "Main Excel file should be created even with minimal data"
                 
                 # Property: File should be valid Excel
-                workbook = load_workbook(filepath)
-                assert len(workbook.sheetnames) > 0, "Workbook should have at least one sheet"
-                workbook.close()
+                workbook = load_workbook(main_filepath)
+                try:
+                    assert len(workbook.sheetnames) > 0, "Workbook should have at least one sheet"
+                finally:
+                    workbook.close()
                 
             except Exception as e:
                 pytest.fail(f"Generator should handle empty inventory gracefully, but raised: {e}")

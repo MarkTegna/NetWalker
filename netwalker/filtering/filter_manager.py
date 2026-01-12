@@ -57,22 +57,32 @@ class FilterManager:
     
     def _load_filter_criteria(self) -> FilterCriteria:
         """Load filter criteria from configuration"""
-        return FilterCriteria(
-            hostname_excludes=self._get_config_list('exclude_hostnames', ['LUMT*', 'LUMV*']),
-            ip_excludes=self._get_config_list('exclude_ip_ranges', ['10.70.0.0/16']),
-            platform_excludes=self._get_config_list('exclude_platforms', 
-                                                   ['linux', 'windows', 'unix', 'server']),
-            capability_excludes=self._get_config_list('exclude_capabilities', 
-                                                     ['host', 'phone', 'camera', 'printer', 'ap'])
-        )
-    
-    def _get_config_list(self, key: str, default: List[str]) -> List[str]:
-        """Get a list configuration value with default"""
-        value = self.config.get(key, default)
-        if isinstance(value, str):
-            # Handle comma-separated string values
-            return [item.strip() for item in value.split(',') if item.strip()]
-        return value if isinstance(value, list) else default
+        # Handle both structured and flat configuration formats
+        if 'exclusions' in self.config:
+            # Structured configuration format
+            exclusions_config = self.config.get('exclusions')
+            if exclusions_config is None:
+                return FilterCriteria(
+                    hostname_excludes=[],
+                    ip_excludes=[],
+                    platform_excludes=[],
+                    capability_excludes=[]
+                )
+            return FilterCriteria(
+                hostname_excludes=exclusions_config.exclude_hostnames or [],
+                ip_excludes=exclusions_config.exclude_ip_ranges or [],
+                platform_excludes=exclusions_config.exclude_platforms or [],
+                capability_excludes=exclusions_config.exclude_capabilities or []
+            )
+        else:
+            # Flat configuration format (backward compatibility)
+            return FilterCriteria(
+                hostname_excludes=self.config.get('hostname_excludes', []),
+                ip_excludes=self.config.get('ip_excludes', []),
+                platform_excludes=self.config.get('platform_excludes', []),
+                capability_excludes=self.config.get('capability_excludes', [])
+            )
+
     
     def should_filter_device(self, hostname: str, ip_address: str, 
                            platform: Optional[str] = None, 
@@ -91,74 +101,130 @@ class FilterManager:
         """
         device_key = f"{hostname}:{ip_address}"
         
-        # Check hostname patterns
-        if self._matches_hostname_pattern(hostname):
-            logger.debug(f"Device {device_key} filtered by hostname pattern")
-            self.filtered_devices.add(device_key)
-            return True
-        
-        # Check IP address ranges
-        if self._matches_ip_range(ip_address):
-            logger.debug(f"Device {device_key} filtered by IP range")
-            self.filtered_devices.add(device_key)
-            return True
-        
-        # Check platform exclusions
-        if platform and self._matches_platform_exclusion(platform):
-            logger.debug(f"Device {device_key} filtered by platform: {platform}")
-            self.filtered_devices.add(device_key)
-            return True
-        
-        # Check capability exclusions
-        if capabilities and self._matches_capability_exclusion(capabilities):
-            logger.debug(f"Device {device_key} filtered by capabilities: {capabilities}")
-            self.filtered_devices.add(device_key)
-            return True
-        
-        return False
+        try:
+            logger.info(f"FILTER DECISION: Evaluating device {device_key}")
+            logger.info(f"  Device details: hostname='{hostname}', ip='{ip_address}', platform='{platform}', capabilities={capabilities}")
+            
+            # Check hostname patterns
+            if self._matches_hostname_pattern(hostname):
+                logger.info(f"  [FILTERED] by hostname pattern - matches one of: {self.criteria.hostname_excludes}")
+                self.filtered_devices.add(device_key)
+                return True
+            else:
+                logger.info(f"  [PASSED] hostname check - no match in patterns: {self.criteria.hostname_excludes}")
+            
+            # Check IP address ranges
+            if self._matches_ip_range(ip_address):
+                logger.info(f"  [FILTERED] by IP range - matches one of: {self.criteria.ip_excludes}")
+                self.filtered_devices.add(device_key)
+                return True
+            else:
+                logger.info(f"  [PASSED] IP range check - no match in ranges: {self.criteria.ip_excludes}")
+            
+            # Check platform exclusions
+            if platform and self._matches_platform_exclusion(platform):
+                logger.info(f"  [FILTERED] by platform - '{platform}' matches one of: {self.criteria.platform_excludes}")
+                self.filtered_devices.add(device_key)
+                return True
+            else:
+                if platform:
+                    logger.info(f"  [PASSED] platform check - '{platform}' not in exclusions")
+                else:
+                    logger.info(f"  [PASSED] platform check - no platform specified")
+            
+            # Check capability exclusions
+            if capabilities and self._matches_capability_exclusion(capabilities):
+                logger.info(f"  [FILTERED] by capabilities - {capabilities} matches one of: {self.criteria.capability_excludes}")
+                self.filtered_devices.add(device_key)
+                return True
+            else:
+                if capabilities:
+                    logger.info(f"  [PASSED] capability check - {capabilities} not in exclusions")
+                else:
+                    logger.info(f"  [PASSED] capability check - no capabilities specified")
+            
+            logger.info(f"  [FINAL DECISION] Device {device_key} will NOT be filtered - proceeding to discovery")
+            return False
+            
+        except Exception as e:
+            logger.error(f"  [ERROR] in filtering evaluation for {device_key}: {e}")
+            logger.exception("Full exception details:")
+            # Default to not filtering on error to avoid blocking discovery
+            return False
     
     def _matches_hostname_pattern(self, hostname: str) -> bool:
         """Check if hostname matches any exclusion pattern"""
         hostname_lower = hostname.lower()
+        logger.debug(f"    Checking hostname '{hostname_lower}' against patterns: {self.criteria.hostname_excludes}")
+        
         for pattern in self.criteria.hostname_excludes:
             if fnmatch.fnmatch(hostname_lower, pattern):
+                logger.debug(f"    [MATCH] Hostname '{hostname_lower}' matches pattern '{pattern}'")
                 return True
+            else:
+                logger.debug(f"    [NO MATCH] Hostname '{hostname_lower}' does not match pattern '{pattern}'")
+        
         return False
     
     def _matches_ip_range(self, ip_address: str) -> bool:
         """Check if IP address falls within any excluded CIDR range"""
+        logger.debug(f"    Checking IP '{ip_address}' against ranges: {self.criteria.ip_excludes}")
+        
         try:
             ip = ipaddress.ip_address(ip_address)
             for cidr_range in self.criteria.ip_excludes:
                 try:
                     network = ipaddress.ip_network(cidr_range, strict=False)
                     if ip in network:
+                        logger.debug(f"    [MATCH] IP '{ip_address}' is within range '{cidr_range}'")
                         return True
+                    else:
+                        logger.debug(f"    [NO MATCH] IP '{ip_address}' is not within range '{cidr_range}'")
                 except (ipaddress.AddressValueError, ValueError) as e:
                     logger.warning(f"Invalid CIDR range {cidr_range}: {e}")
                     continue
         except (ipaddress.AddressValueError, ValueError):
             # If it's not a valid IP address, it might be a hostname
             # Skip IP range filtering for hostnames
-            logger.debug(f"Skipping IP range filtering for hostname: {ip_address}")
+            logger.debug(f"    [INFO] Skipping IP range filtering for hostname: {ip_address}")
         
         return False
     
     def _matches_platform_exclusion(self, platform: str) -> bool:
         """Check if platform matches any exclusion"""
-        platform_lower = platform.lower()
-        for excluded_platform in self.criteria.platform_excludes:
-            if excluded_platform in platform_lower:
-                return True
-        return False
+        try:
+            platform_lower = platform.lower()
+            logger.debug(f"    Checking platform '{platform_lower}' against exclusions: {self.criteria.platform_excludes}")
+            
+            for excluded_platform in self.criteria.platform_excludes:
+                if excluded_platform in platform_lower:
+                    logger.debug(f"    [MATCH] Platform '{platform_lower}' contains excluded substring '{excluded_platform}'")
+                    return True
+                else:
+                    logger.debug(f"    [NO MATCH] Platform '{platform_lower}' does not contain '{excluded_platform}'")
+            
+            return False
+        except Exception as e:
+            logger.error(f"    [ERROR] in platform matching for '{platform}': {e}")
+            return False
     
     def _matches_capability_exclusion(self, capabilities: List[str]) -> bool:
         """Check if any capability matches exclusions"""
+        import re
         capabilities_lower = [cap.lower() for cap in capabilities]
+        logger.debug(f"    Checking capabilities {capabilities_lower} against exclusions: {self.criteria.capability_excludes}")
+        
         for excluded_cap in self.criteria.capability_excludes:
             for cap in capabilities_lower:
-                if excluded_cap in cap:
+                # Use word boundary matching to avoid false positives
+                # This ensures "phone" matches "phone" or "ip phone" but not "phone port"
+                pattern = r'\b' + re.escape(excluded_cap) + r'\b'
+                if re.search(pattern, cap):
+                    logger.debug(f"    [MATCH] Capability '{cap}' matches excluded pattern '{excluded_cap}' (regex: {pattern})")
                     return True
+                else:
+                    logger.debug(f"    [NO MATCH] Capability '{cap}' does not match excluded pattern '{excluded_cap}'")
+        
         return False
     
     def mark_as_boundary(self, hostname: str, ip_address: str, reason: str):

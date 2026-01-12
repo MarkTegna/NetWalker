@@ -9,7 +9,6 @@ REM Check if Python is available
 python --version >nul 2>&1
 if errorlevel 1 (
     echo Error: Python is not installed or not in PATH
-    pause
     exit /b 1
 )
 
@@ -23,11 +22,9 @@ python build_executable.py
 
 if errorlevel 1 (
     echo Build failed!
-    pause
     exit /b 1
 )
 
 echo.
 echo Build completed successfully!
 echo Check the dist directory for the executable and ZIP file.
-pause

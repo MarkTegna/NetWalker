@@ -72,9 +72,10 @@ graph TB
 **Configuration Structure**:
 ```ini
 [discovery]
-max_depth = 10
+max_depth = 2
 concurrent_connections = 5
 connection_timeout = 30
+discovery_timeout = 300
 discovery_protocols = CDP,LLDP
 
 [filtering]
@@ -87,7 +88,7 @@ exclude_cidrs =
 exclude_hostnames = LUMT*, LUMV*
 exclude_ip_ranges = 10.70.0.0/16
 exclude_platforms = linux, windows, unix, freebsd, openbsd, netbsd, solaris, aix, hp-ux, vmware, docker, kubernetes, phone, host phone, camera, printer, access point, wireless, server
-exclude_capabilities = host phone, phone, camera, printer, server
+exclude_capabilities = host phone, camera, printer, server
 
 [output]
 reports_directory = .\reports
@@ -117,7 +118,14 @@ preferred_method = ssh
 3. Extract neighbor information using protocol parsers
 4. Apply filtering rules to determine discovery boundaries
 5. Add unfiltered neighbors to queue at depth + 1
-6. Continue until queue empty or max depth reached
+6. Reset discovery timeout when new (non-duplicate) devices are added to queue
+7. Continue until queue empty or max depth reached
+
+**Timeout Management**:
+- Separate connection timeout (30s) for individual device connections
+- Discovery timeout (300s) for overall discovery process
+- Timeout reset mechanism when new devices are discovered to handle large networks
+- Graceful termination when timeout is reached
 
 ### Connection Manager
 
@@ -360,41 +368,45 @@ After analyzing the acceptance criteria, I've identified the following testable 
 *For any* generated output file, the filename should follow the YYYYMMDD-HH-MM timestamp format
 **Validates: Requirements 5.6, 12.5**
 
+**Property 18: IP Address Display Consistency**
+*For any* device in Excel inventory sheets, IP addresses should be consistently extracted from both 'primary_ip' and 'ip_address' fields with proper fallback logic
+**Validates: Requirements 5.7**
+
 ### Visio Integration Properties
 
-**Property 18: COM Interface Exclusivity**
+**Property 19: COM Interface Exclusivity**
 *For any* Visio operation, only the pywin32 COM interface should be used without any external library dependencies
 **Validates: Requirements 6.1**
 
-**Property 19: Visio Installation Validation**
+**Property 20: Visio Installation Validation**
 *For any* Visio output request when Microsoft Visio is not installed, the system should fail cleanly with appropriate error messaging
 **Validates: Requirements 6.2**
 
-**Property 20: COM Resource Cleanup**
+**Property 21: COM Resource Cleanup**
 *For any* Visio operation sequence, all COM resources should be properly released and cleaned up after completion
 **Validates: Requirements 6.4**
 
 ### Configuration Management Properties
 
-**Property 21: Configuration Loading and Override**
+**Property 22: Configuration Loading and Override**
 *For any* combination of INI file settings and CLI options, CLI options should take precedence over INI file settings
 **Validates: Requirements 7.2**
 
-**Property 22: Default Configuration Completeness**
+**Property 23: Default Configuration Completeness**
 *For any* default configuration creation, all available options with descriptions should be included in the generated netwalker.ini file
 **Validates: Requirements 7.4**
 
-**Property 23: Credential Format Support**
+**Property 24: Credential Format Support**
 *For any* credential configuration (encrypted or plain text), the system should correctly process and use the credentials for authentication
 **Validates: Requirements 7.5**
 
 ### Security Properties
 
-**Property 24: Automatic Credential Encryption**
+**Property 25: Automatic Credential Encryption**
 *For any* plain text credentials in configuration files, the system should encrypt them using MD5 and remove the plain text versions
 **Validates: Requirements 8.2**
 
-**Property 25: Credential Exposure Prevention**
+**Property 26: Credential Exposure Prevention**
 *For any* system output (logs, documentation, CLI), credentials should never be exposed in plain text
 **Validates: Requirements 8.3, 8.4**
 

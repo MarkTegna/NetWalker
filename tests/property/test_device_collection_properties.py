@@ -82,16 +82,16 @@ def test_complete_device_information_collection():
     """
     collector = DeviceCollector()
     
-    # Mock scrapli connection
-    mock_connection = Mock()
-    mock_connection.send_command.return_value = Mock(result=SAMPLE_VERSION_OUTPUT)
+    # Mock scrapli connection (has transport attribute, not device_type)
+    mock_connection = Mock(spec=['send_command', 'transport'])
+    mock_connection.transport = Mock()  # This makes it a scrapli connection
     
     # Mock VTP and neighbor commands to return empty (focus on basic info)
     def mock_command_side_effect(command):
         if "show version" in command:
             return Mock(result=SAMPLE_VERSION_OUTPUT)
         elif "show vtp" in command:
-            return Mock(result="VTP Version : 2")
+            return Mock(result="VTP Version running : 2")
         elif "show cdp" in command or "show lldp" in command:
             return Mock(result="")
         else:

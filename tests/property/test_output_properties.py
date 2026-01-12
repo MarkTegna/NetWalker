@@ -180,14 +180,14 @@ class TestOutputManagerProperties:
                 report_path = output_manager.get_report_filepath(filename)
                 
                 # Property: Report path should be in reports directory
-                assert config['reports_directory'] in report_path, "Report path should be in reports directory"
+                assert os.path.normpath(config['reports_directory']) in os.path.normpath(report_path), "Report path should be in reports directory"
                 assert filename in report_path, f"Report path should contain filename '{filename}'"
                 
                 # Test log file paths
                 log_path = output_manager.get_log_filepath(filename)
                 
                 # Property: Log path should be in logs directory
-                assert config['logs_directory'] in log_path, "Log path should be in logs directory"
+                assert os.path.normpath(config['logs_directory']) in os.path.normpath(log_path), "Log path should be in logs directory"
                 assert filename in log_path, f"Log path should contain filename '{filename}'"
                 
                 # Property: Paths should be different for different directories
@@ -219,36 +219,6 @@ class TestOutputManagerProperties:
                 assert info['exists'], f"{dir_name} directory should exist"
                 assert info['is_directory'], f"{dir_name} should be a directory"
                 assert 'file_count' in info, f"{dir_name} info should include file count"
-    
-    @given(
-        max_age_hours=st.integers(min_value=1, max_value=48)
-    )
-    def test_temp_file_cleanup_property(self, max_age_hours):
-        """
-        Property: Temp file cleanup should respect age limits
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = {'temp_directory': temp_dir}
-            output_manager = OutputManager(config)
-            
-            # Create some test files
-            test_files = []
-            for i in range(3):
-                test_file = os.path.join(temp_dir, f"test_file_{i}.tmp")
-                with open(test_file, 'w') as f:
-                    f.write(f"Test content {i}")
-                test_files.append(test_file)
-            
-            # Property: Files should exist before cleanup
-            for test_file in test_files:
-                assert os.path.exists(test_file), "Test file should exist before cleanup"
-            
-            # Run cleanup (with very high age limit, should not delete recent files)
-            output_manager.cleanup_temp_files(max_age_hours=max_age_hours)
-            
-            # Property: Recent files should still exist (they're just created)
-            for test_file in test_files:
-                assert os.path.exists(test_file), "Recent test files should not be deleted"
     
     def test_path_normalization_property(self):
         """

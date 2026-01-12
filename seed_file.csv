@@ -1,6 +1,1 @@
-# NetWalker Seed Devices File
-# Add your seed device hostnames or IP addresses, one per line
-# Examples:
-# CORE-SWITCH-01
-# 192.168.1.1
-# router.example.com
+BORO-CORE-A

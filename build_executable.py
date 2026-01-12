@@ -397,6 +397,17 @@ For more information, visit: https://github.com/MarkTegna
     shutil.make_archive(f"dist/{package_name}", 'zip', package_path.parent, package_path.name)
     
     print(f"Created distribution package: {zip_name}")
+    
+    # Copy ZIP file to Archive directory
+    archive_dir = Path("Archive")
+    if not archive_dir.exists():
+        archive_dir.mkdir()
+        print(f"Created Archive directory: {archive_dir}")
+    
+    archive_zip_path = archive_dir / f"{package_name}.zip"
+    shutil.copy2(zip_name, archive_zip_path)
+    print(f"Copied ZIP file to Archive: {archive_zip_path}")
+    
     return True
 
 
@@ -456,6 +467,7 @@ def main():
         print(f"Version: {new_version}")
         print(f"Executable: dist/netwalker.exe")
         print(f"Distribution: dist/NetWalker_v{new_version}.zip")
+        print(f"Archive copy: Archive/NetWalker_v{new_version}.zip")
         
         return 0
     

@@ -1,52 +1,27 @@
-"""
-PyInstaller hook for scrapli transport plugins
-"""
+# PyInstaller hook for scrapli and netmiko
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 # Collect all scrapli modules and data
 datas, binaries, hiddenimports = collect_all('scrapli')
 
-# Add transport plugin modules explicitly
-transport_plugins = [
-    'scrapli.transport.plugins.paramiko.transport',
-    'scrapli.transport.plugins.ssh2.transport', 
-    'scrapli.transport.plugins.asyncssh.transport',
-    'scrapli.transport.plugins.system.transport',
+# Add specific transport plugin modules (telnet and system only for scrapli)
+transport_modules = [
     'scrapli.transport.plugins.telnet.transport',
+    'scrapli.transport.plugins.system.transport',
 ]
 
-hiddenimports.extend(transport_plugins)
+for module in transport_modules:
+    try:
+        hiddenimports.extend(collect_submodules(module))
+    except:
+        pass
 
-# Add transport plugin dependencies
-transport_deps = [
-    'paramiko',
-    'paramiko.client',
-    'paramiko.transport',
-    'paramiko.channel',
-    'paramiko.ssh_exception',
-    'ssh2',
-    'ssh2.session',
-    'ssh2.channel',
-    'asyncssh',
-    'asyncssh.connection',
-    'asyncssh.client',
-]
-
-hiddenimports.extend(transport_deps)
-
-# Add scrapli core modules
-core_modules = [
-    'scrapli.factory',
-    'scrapli.driver.core.cisco_iosxe',
-    'scrapli.driver.core.cisco_iosxr', 
-    'scrapli.driver.core.cisco_nxos',
-    'scrapli.driver.core.arista_eos',
-    'scrapli.driver.core.juniper_junos',
-    'scrapli.exceptions',
-    'scrapli.response',
-    'scrapli.channel',
-    'scrapli.logging',
-]
-
-hiddenimports.extend(core_modules)
+# Add netmiko dependencies
+try:
+    netmiko_datas, netmiko_binaries, netmiko_hiddenimports = collect_all('netmiko')
+    datas.extend(netmiko_datas)
+    binaries.extend(netmiko_binaries)
+    hiddenimports.extend(netmiko_hiddenimports)
+except:
+    pass

@@ -21,6 +21,7 @@ from .discovery.thread_manager import ThreadManager
 from .reports.excel_generator import ExcelReportGenerator
 from .output.output_manager import OutputManager
 from .logging_config import setup_logging
+from .validation.dns_validator import DNSValidator
 from .version import __version__, __author__, __compile_date__
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class NetWalkerApp:
         self.discovery_engine: Optional[DiscoveryEngine] = None
         self.thread_manager: Optional[ThreadManager] = None
         self.excel_generator: Optional[ExcelReportGenerator] = None
+        self.dns_validator: Optional[DNSValidator] = None
         
         # Application state
         self.initialized = False
@@ -114,8 +116,12 @@ class NetWalkerApp:
             logger.info("Step 9: Initializing reporting...")
             self._initialize_reporting()
             
+            # Initialize DNS validation
+            logger.info("Step 10: Initializing DNS validation...")
+            self._initialize_dns_validation()
+            
             # Load seed devices
-            logger.info("Step 10: Loading seed devices...")
+            logger.info("Step 11: Loading seed devices...")
             self._load_seed_devices()
             
             self.initialized = True
@@ -129,27 +135,33 @@ class NetWalkerApp:
     
     def _initialize_configuration(self):
         """Initialize configuration management"""
-        # For now, create a simple flat configuration
-        # TODO: Integrate with full ConfigurationManager later
+        # Use the proper ConfigurationManager to load from INI file
+        self.config_manager = ConfigurationManager('netwalker.ini')
+        parsed_config = self.config_manager.load_configuration()
         
-        # Default configuration
+        # Convert parsed configuration to flat structure for backward compatibility
         self.config = {
-            'reports_directory': './reports',
-            'logs_directory': './logs',
-            'temp_directory': './temp',
-            'backup_directory': './backup',
-            'max_discovery_depth': 5,
-            'discovery_timeout_seconds': 300,
-            'max_concurrent_connections': 10,
-            'connection_timeout_seconds': 30,
-            'task_timeout_seconds': 60,
-            'hostname_excludes': ['LUMT*', 'LUMV*'],
-            'ip_excludes': ['10.70.0.0/16'],
-            'platform_excludes': ['linux', 'windows', 'unix', 'server'],
-            'capability_excludes': ['host', 'phone', 'camera', 'printer', 'ap'],
-            'log_level': 'INFO',
-            'console_logging': True
+            'reports_directory': parsed_config['output'].reports_directory,
+            'logs_directory': parsed_config['output'].logs_directory,
+            'max_discovery_depth': parsed_config['discovery'].max_depth,
+            'discovery_timeout_seconds': parsed_config['discovery'].discovery_timeout,
+            'max_concurrent_connections': parsed_config['discovery'].concurrent_connections,
+            'connection_timeout_seconds': parsed_config['discovery'].connection_timeout,
+            'enable_progress_tracking': parsed_config['discovery'].enable_progress_tracking,
+            'task_timeout_seconds': 60,  # Keep this default for now
+            'hostname_excludes': parsed_config['exclusions'].exclude_hostnames,
+            'ip_excludes': parsed_config['exclusions'].exclude_ip_ranges,
+            'platform_excludes': parsed_config['exclusions'].exclude_platforms,
+            'capability_excludes': parsed_config['exclusions'].exclude_capabilities,
+            'log_level': 'INFO',  # Keep this default for now
+            'console_logging': True  # Keep this default for now
         }
+        
+        # Debug logging to see what was loaded
+        print(f"DEBUG: Loaded hostname excludes: {self.config['hostname_excludes']}")
+        print(f"DEBUG: Loaded IP excludes: {self.config['ip_excludes']}")
+        print(f"DEBUG: Loaded platform excludes: {len(self.config['platform_excludes'])} items")
+        print(f"DEBUG: Loaded capability excludes: {len(self.config['capability_excludes'])} items")
         
         # Apply CLI overrides
         if self.cli_args:
@@ -228,6 +240,19 @@ class NetWalkerApp:
         
         self.excel_generator = ExcelReportGenerator(config_with_reports)
         logger.info("Report generation initialized")
+    
+    def _initialize_dns_validation(self):
+        """Initialize DNS validation"""
+        # Add DNS-specific configuration options
+        dns_config = self.config.copy()
+        dns_config.update({
+            'dns_timeout_seconds': self.config.get('dns_timeout_seconds', 5),
+            'max_concurrent_dns': self.config.get('max_concurrent_dns', 10),
+            'enable_ping_resolution': self.config.get('enable_ping_resolution', True)
+        })
+        
+        self.dns_validator = DNSValidator(dns_config)
+        logger.info("DNS validation initialized")
     
     def _load_seed_devices(self):
         """Load seed devices from configuration"""
@@ -347,6 +372,14 @@ class NetWalkerApp:
             report_files.append(inventory_path)
             logger.info(f"Generated inventory report: {inventory_path}")
             
+            # Perform DNS validation if enabled
+            if self.config.get('enable_dns_validation', True):
+                logger.info("Performing DNS validation...")
+                dns_report_path = self.perform_dns_validation(inventory)
+                if dns_report_path:
+                    report_files.append(dns_report_path)
+                    logger.info(f"Generated DNS validation report: {dns_report_path}")
+            
             logger.info(f"Total reports generated: {len(report_files)}")
             for report in report_files:
                 logger.info(f"  - {report}")
@@ -357,6 +390,51 @@ class NetWalkerApp:
             logger.error(f"Report generation failed: {e}")
             logger.exception("Full exception details:")
             raise
+    
+    def perform_dns_validation(self, inventory: Dict[str, Dict[str, Any]]) -> Optional[str]:
+        """
+        Perform DNS validation on discovered devices.
+        
+        Args:
+            inventory: Device inventory dictionary
+            
+        Returns:
+            Path to DNS validation report, or None if validation failed
+        """
+        try:
+            # Extract device hostnames and IP addresses
+            devices = []
+            for device_key, device_info in inventory.items():
+                hostname = device_info.get('hostname', '')
+                ip_address = self.excel_generator._extract_ip_address(device_key, device_info)
+                
+                if hostname and ip_address:
+                    devices.append((hostname, ip_address))
+            
+            if not devices:
+                logger.warning("No devices found for DNS validation")
+                return None
+            
+            logger.info(f"Starting DNS validation for {len(devices)} devices")
+            
+            # Perform concurrent DNS validation
+            dns_results = self.dns_validator.validate_devices_concurrent(devices)
+            
+            # Generate DNS validation report
+            dns_report_path = self.excel_generator.generate_dns_report(dns_results)
+            
+            # Log summary
+            summary = self.dns_validator.get_validation_summary()
+            logger.info(f"DNS validation completed: {summary['forward_dns_success']}/{summary['total_devices']} forward DNS success, "
+                       f"{summary['reverse_dns_success']}/{summary['total_devices']} reverse DNS success, "
+                       f"{summary['rfc1918_conflicts']} RFC1918 conflicts detected")
+            
+            return dns_report_path
+            
+        except Exception as e:
+            logger.error(f"DNS validation failed: {e}")
+            logger.exception("DNS validation error details:")
+            return None
     
     def run_discovery(self) -> bool:
         """
@@ -402,9 +480,6 @@ class NetWalkerApp:
         try:
             if self.thread_manager:
                 self.thread_manager.stop()
-            
-            if self.output_manager:
-                self.output_manager.cleanup_temp_files()
             
             logger.info("NetWalker application cleanup completed")
             

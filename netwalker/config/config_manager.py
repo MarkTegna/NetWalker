@@ -67,13 +67,17 @@ class ConfigurationManager:
 
 [discovery]
 # Maximum depth for recursive discovery
-max_depth = 10
+max_depth = 1
 # Number of concurrent device connections
 concurrent_connections = 5
 # Connection timeout in seconds
 connection_timeout = 30
+# Total discovery process timeout in seconds
+discovery_timeout = 300
 # Discovery protocols to use (comma-separated)
 discovery_protocols = CDP,LLDP
+# Enable progress tracking display (true/false)
+enable_progress_tracking = true
 
 [filtering]
 # Include devices matching these wildcards (comma-separated)
@@ -87,13 +91,13 @@ exclude_cidrs =
 
 [exclusions]
 # Exclude devices with these hostname patterns (comma-separated)
-exclude_hostnames = LUMT*,LUMV*
+exclude_hostnames = 
 # Exclude devices in these IP ranges (comma-separated)
-exclude_ip_ranges = 10.70.0.0/16
+exclude_ip_ranges = 
 # Exclude devices with these platforms (comma-separated)
-exclude_platforms = linux,windows,unix,freebsd,openbsd,netbsd,solaris,aix,hp-ux,vmware,docker,kubernetes,phone,host phone,camera,printer,access point,wireless,server
+exclude_platforms = linux,windows,unix,freebsd,openbsd,netbsd,solaris,aix,hp-ux,vmware,docker,kubernetes,host phone,camera,printer,access point,wireless,server
 # Exclude devices with these capabilities (comma-separated)
-exclude_capabilities = host phone,phone,camera,printer,server
+exclude_capabilities = host phone,camera,printer,server
 
 [output]
 # Directory for report files
@@ -104,6 +108,8 @@ logs_directory = ./logs
 excel_format = xlsx
 # Enable Visio diagram generation (true/false)
 visio_enabled = true
+# Site boundary pattern for creating separate workbooks (wildcard pattern)
+site_boundary_pattern = *-CORE-*
 
 [connection]
 # SSH port number
@@ -128,6 +134,8 @@ preferred_method = ssh
             config.max_depth = self._config.getint('discovery', 'max_depth', fallback=config.max_depth)
             config.concurrent_connections = self._config.getint('discovery', 'concurrent_connections', fallback=config.concurrent_connections)
             config.connection_timeout = self._config.getint('discovery', 'connection_timeout', fallback=config.connection_timeout)
+            config.discovery_timeout = self._config.getint('discovery', 'discovery_timeout', fallback=config.discovery_timeout)
+            config.enable_progress_tracking = self._config.getboolean('discovery', 'enable_progress_tracking', fallback=config.enable_progress_tracking)
             
             protocols_str = self._config.get('discovery', 'discovery_protocols', fallback='CDP,LLDP')
             config.protocols = [p.strip() for p in protocols_str.split(',') if p.strip()]
@@ -139,6 +147,10 @@ preferred_method = ssh
             config.concurrent_connections = self._cli_overrides['concurrent_connections']
         if 'timeout' in self._cli_overrides:
             config.connection_timeout = self._cli_overrides['timeout']
+        if 'discovery_timeout' in self._cli_overrides:
+            config.discovery_timeout = self._cli_overrides['discovery_timeout']
+        if 'enable_progress_tracking' in self._cli_overrides:
+            config.enable_progress_tracking = self._cli_overrides['enable_progress_tracking']
             
         return config
     
@@ -166,11 +178,17 @@ preferred_method = ssh
         config = ExclusionConfig()
         
         if self._config.has_section('exclusions'):
-            exclude_hostnames = self._config.get('exclusions', 'exclude_hostnames', fallback='LUMT*,LUMV*')
-            config.exclude_hostnames = [h.strip() for h in exclude_hostnames.split(',') if h.strip()]
+            exclude_hostnames = self._config.get('exclusions', 'exclude_hostnames', fallback='')
+            if exclude_hostnames:
+                config.exclude_hostnames = [h.strip() for h in exclude_hostnames.split(',') if h.strip()]
+            else:
+                config.exclude_hostnames = []  # Empty list if explicitly empty in INI
             
-            exclude_ip_ranges = self._config.get('exclusions', 'exclude_ip_ranges', fallback='10.70.0.0/16')
-            config.exclude_ip_ranges = [r.strip() for r in exclude_ip_ranges.split(',') if r.strip()]
+            exclude_ip_ranges = self._config.get('exclusions', 'exclude_ip_ranges', fallback='')
+            if exclude_ip_ranges:
+                config.exclude_ip_ranges = [r.strip() for r in exclude_ip_ranges.split(',') if r.strip()]
+            else:
+                config.exclude_ip_ranges = []  # Empty list if explicitly empty in INI
             
             exclude_platforms = self._config.get('exclusions', 'exclude_platforms', fallback='')
             if exclude_platforms:
@@ -191,6 +209,7 @@ preferred_method = ssh
             config.logs_directory = self._config.get('output', 'logs_directory', fallback=config.logs_directory)
             config.excel_format = self._config.get('output', 'excel_format', fallback=config.excel_format)
             config.visio_enabled = self._config.getboolean('output', 'visio_enabled', fallback=config.visio_enabled)
+            config.site_boundary_pattern = self._config.get('output', 'site_boundary_pattern', fallback=config.site_boundary_pattern)
         
         # Apply CLI overrides
         if 'reports_dir' in self._cli_overrides:

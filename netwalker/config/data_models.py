@@ -9,10 +9,12 @@ from typing import List, Optional
 @dataclass
 class DiscoveryConfig:
     """Configuration for discovery parameters"""
-    max_depth: int = 10
+    max_depth: int = 1
     concurrent_connections: int = 5
     connection_timeout: int = 30
+    discovery_timeout: int = 300  # Total discovery process timeout (5 minutes)
     protocols: List[str] = None
+    enable_progress_tracking: bool = True
     
     def __post_init__(self):
         if self.protocols is None:
@@ -48,18 +50,13 @@ class ExclusionConfig:
     
     def __post_init__(self):
         if self.exclude_hostnames is None:
-            self.exclude_hostnames = ['LUMT*', 'LUMV*']
+            self.exclude_hostnames = []  # No hardcoded defaults
         if self.exclude_ip_ranges is None:
-            self.exclude_ip_ranges = ['10.70.0.0/16']
+            self.exclude_ip_ranges = []
         if self.exclude_platforms is None:
-            self.exclude_platforms = [
-                'linux', 'windows', 'unix', 'freebsd', 'openbsd', 'netbsd', 
-                'solaris', 'aix', 'hp-ux', 'vmware', 'docker', 'kubernetes', 
-                'phone', 'host phone', 'camera', 'printer', 'access point', 
-                'wireless', 'server'
-            ]
+            self.exclude_platforms = []
         if self.exclude_capabilities is None:
-            self.exclude_capabilities = ['host phone', 'phone', 'camera', 'printer', 'server']
+            self.exclude_capabilities = []
 
 
 @dataclass
@@ -69,6 +66,7 @@ class OutputConfig:
     logs_directory: str = "./logs"
     excel_format: str = "xlsx"
     visio_enabled: bool = True
+    site_boundary_pattern: str = "*-CORE-*"
 
 
 @dataclass
