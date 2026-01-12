@@ -21,47 +21,32 @@ sys.path.insert(0, str(Path(__file__).parent))
 from netwalker.version import __version__, __author__
 
 
-def increment_patch_version():
-    """Increment the patch version number before build"""
-    version_file = Path("netwalker/version.py")
+def increment_version_for_build():
+    """Increment version for user build using the new version management system"""
+    import subprocess
     
-    # Read current version file
-    with open(version_file, 'r') as f:
-        content = f.read()
-    
-    # Parse current version
-    current_version = __version__
-    major, minor, patch = map(int, current_version.split('.'))
-    
-    # Increment patch version
-    new_patch = patch + 1
-    new_version = f"{major}.{minor}.{new_patch}"
-    
-    # Update compile date
-    compile_date = datetime.now().strftime("%Y-%m-%d")
-    
-    # Update version file
-    new_content = content.replace(
-        f'__version__ = "{current_version}"',
-        f'__version__ = "{new_version}"'
-    ).replace(
-        f'__compile_date__ = "{datetime.now().strftime("%Y-%m-%d")}"',
-        f'__compile_date__ = "{compile_date}"'
-    )
-    
-    # Handle case where compile_date might have different format
-    import re
-    new_content = re.sub(
-        r'__compile_date__ = "[^"]*"',
-        f'__compile_date__ = "{compile_date}"',
-        new_content
-    )
-    
-    with open(version_file, 'w') as f:
-        f.write(new_content)
-    
-    print(f"Version incremented: {current_version} -> {new_version}")
-    return new_version
+    try:
+        # Use the new increment_build.py script for user builds
+        result = subprocess.run([
+            sys.executable, 'increment_build.py', '--user'
+        ], capture_output=True, text=True, check=True)
+        
+        print(result.stdout.strip())
+        
+        # Re-import to get the new version
+        import importlib
+        import netwalker.version
+        importlib.reload(netwalker.version)
+        
+        return netwalker.version.__version__
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Version increment failed: {e}")
+        print(f"Error output: {e.stderr}")
+        raise RuntimeError(f"Failed to increment version: {e}")
+    except Exception as e:
+        print(f"Unexpected error during version increment: {e}")
+        raise
 
 
 def create_spec_file():
@@ -443,7 +428,7 @@ def main():
     
     try:
         # Step 1: Increment version
-        new_version = increment_patch_version()
+        new_version = increment_version_for_build()
         
         # Step 2: Prepare supporting files
         prepare_supporting_files()

@@ -386,10 +386,22 @@ class ConnectionManager:
         for host in hosts:
             self.close_connection(host)
         
-        # Shutdown the thread pool executor
+        # Shutdown the thread pool executor with timeout
         self.logger.info("Shutting down connection thread pool")
-        self._executor.shutdown(wait=True)
-        self.logger.info("All connections and threads cleaned up successfully")
+        try:
+            # Try graceful shutdown with timeout
+            self._executor.shutdown(wait=True)
+            # Note: ThreadPoolExecutor.shutdown() doesn't accept timeout parameter
+            # but it should complete quickly since we closed all connections
+            self.logger.info("All connections and threads cleaned up successfully")
+        except Exception as e:
+            self.logger.warning(f"Error during connection thread pool shutdown: {e}")
+            # Force shutdown if there's an issue
+            try:
+                self._executor.shutdown(wait=False)
+                self.logger.info("Forced connection thread pool shutdown")
+            except Exception as force_error:
+                self.logger.error(f"Force shutdown also failed: {force_error}")
     
     def get_active_connections(self) -> Dict[str, str]:
         """

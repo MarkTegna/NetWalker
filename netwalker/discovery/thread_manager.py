@@ -140,16 +140,51 @@ class ThreadManager:
             )
             logger.info(f"Started ThreadPoolExecutor with {self.max_concurrent_connections} workers")
     
-    def stop(self, wait: bool = True):
+    def stop(self, wait: bool = True, timeout: float = 30.0):
         """
         Stop the thread pool executor.
         
         Args:
             wait: Whether to wait for running tasks to complete
+            timeout: Maximum time to wait for tasks to complete (seconds)
         """
         if self.executor is not None:
             logger.info("Shutting down ThreadPoolExecutor")
-            self.executor.shutdown(wait=wait)
+            
+            if wait:
+                # First, try to cancel all pending tasks
+                logger.info("Cancelling pending tasks...")
+                cancelled_count = 0
+                with self._tasks_lock:
+                    for task_id, future in list(self.active_tasks.items()):
+                        if future.cancel():
+                            cancelled_count += 1
+                            logger.debug(f"Cancelled pending task {task_id}")
+                
+                if cancelled_count > 0:
+                    logger.info(f"Cancelled {cancelled_count} pending tasks")
+                
+                # Wait for active tasks with timeout
+                remaining_tasks = self.get_active_task_count()
+                if remaining_tasks > 0:
+                    logger.info(f"Waiting up to {timeout} seconds for {remaining_tasks} active tasks to complete...")
+                    completed = self.wait_for_completion(timeout=timeout)
+                    
+                    if not completed:
+                        logger.warning(f"Timeout after {timeout} seconds - forcing shutdown")
+                        # Force shutdown without waiting
+                        self.executor.shutdown(wait=False)
+                    else:
+                        logger.info("All tasks completed successfully")
+                        self.executor.shutdown(wait=True)
+                else:
+                    logger.info("No active tasks to wait for")
+                    self.executor.shutdown(wait=True)
+            else:
+                # Immediate shutdown
+                logger.info("Immediate shutdown requested")
+                self.executor.shutdown(wait=False)
+            
             self.executor = None
             
             # Reset counters
@@ -352,16 +387,35 @@ class ThreadManager:
             # Wait for all futures to complete
             futures = list(self.active_tasks.values())
             
+            if not futures:
+                return True
+            
+            logger.info(f"Waiting for {len(futures)} active tasks to complete (timeout: {timeout}s)")
+            
+            completed_count = 0
             for future in as_completed(futures, timeout=timeout):
                 try:
                     future.result()  # This will raise any exceptions
+                    completed_count += 1
+                    logger.debug(f"Task completed ({completed_count}/{len(futures)})")
                 except Exception as e:
                     logger.error(f"Task failed during completion wait: {e}")
+                    completed_count += 1  # Count failed tasks as completed
             
+            logger.info(f"All {completed_count} tasks completed")
             return True
             
         except Exception as e:
-            logger.warning(f"Timeout waiting for task completion: {e}")
+            logger.warning(f"Timeout or error waiting for task completion: {e}")
+            
+            # Log remaining active tasks
+            with self._tasks_lock:
+                remaining_tasks = len(self.active_tasks)
+                if remaining_tasks > 0:
+                    logger.warning(f"{remaining_tasks} tasks still active after timeout")
+                    for task_id in list(self.active_tasks.keys())[:5]:  # Log first 5
+                        logger.warning(f"  - Still active: {task_id}")
+            
             return False
     
     def cancel_all_tasks(self):
@@ -415,4 +469,4 @@ class ThreadManager:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
-        self.stop(wait=True)
+        self.stop(wait=True, timeout=30.0)

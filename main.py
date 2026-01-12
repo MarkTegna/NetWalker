@@ -11,6 +11,8 @@ Author: Mark Oldham
 import sys
 import argparse
 import logging
+import signal
+import threading
 from pathlib import Path
 
 # Add the project root to Python path
@@ -19,6 +21,31 @@ sys.path.insert(0, str(project_root))
 
 from netwalker.netwalker_app import NetWalkerApp
 from netwalker.version import __version__, __author__
+
+# Global variable to track the app instance for signal handling
+_app_instance = None
+_shutdown_event = threading.Event()
+
+
+def signal_handler(signum, frame):
+    """Handle termination signals gracefully"""
+    global _app_instance, _shutdown_event
+    
+    print(f"\nReceived signal {signum} - initiating graceful shutdown...")
+    logging.info(f"Received signal {signum} - initiating graceful shutdown")
+    
+    _shutdown_event.set()
+    
+    if _app_instance:
+        try:
+            # Force cleanup with shorter timeout for signal handling
+            _app_instance.cleanup()
+        except Exception as e:
+            print(f"Error during signal cleanup: {e}")
+            logging.error(f"Error during signal cleanup: {e}")
+    
+    print("Shutdown complete")
+    sys.exit(128 + signum)
 
 
 def parse_arguments():
@@ -165,6 +192,12 @@ def convert_args_to_config(args):
 
 def main():
     """Main application entry point"""
+    global _app_instance
+    
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     try:
         # Parse command-line arguments
         args = parse_arguments()
@@ -174,6 +207,8 @@ def main():
         
         # Initialize and run NetWalker application
         with NetWalkerApp(config_file=args.config, cli_args=cli_config) as app:
+            _app_instance = app  # Store for signal handler
+            
             print(f"NetWalker {__version__} - Network Topology Discovery Tool")
             print(f"Author: {__author__}")
             print("-" * 60)
@@ -196,6 +231,9 @@ def main():
         print(f"\nFatal error: {e}")
         logging.exception("Fatal error in main application")
         return 1
+    
+    finally:
+        _app_instance = None
 
 
 if __name__ == "__main__":

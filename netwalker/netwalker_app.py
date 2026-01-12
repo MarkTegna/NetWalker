@@ -478,13 +478,54 @@ class NetWalkerApp:
     def cleanup(self):
         """Cleanup application resources"""
         try:
+            logger.info("Starting NetWalker application cleanup...")
+            
+            # Close all active connections first
+            if self.connection_manager:
+                logger.info("Closing all active connections...")
+                try:
+                    self.connection_manager.close_all_connections()
+                    logger.info("All connections closed successfully")
+                except Exception as e:
+                    logger.warning(f"Error closing connections: {e}")
+            
+            # Stop thread manager
             if self.thread_manager:
-                self.thread_manager.stop()
+                logger.info("Stopping thread manager...")
+                # Use a 30-second timeout to prevent hanging
+                self.thread_manager.stop(wait=True, timeout=30.0)
+                logger.info("Thread manager stopped successfully")
+            
+            # Force garbage collection to help with cleanup
+            import gc
+            gc.collect()
             
             logger.info("NetWalker application cleanup completed")
             
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
+            logger.exception("Cleanup error details:")
+            
+            # If cleanup fails, try force cleanup
+            try:
+                if self.connection_manager:
+                    logger.warning("Forcing connection manager shutdown due to cleanup error")
+                    # Force close connections without waiting
+                    try:
+                        hosts = list(self.connection_manager._active_connections.keys())
+                        for host in hosts:
+                            try:
+                                self.connection_manager.close_connection(host)
+                            except:
+                                pass
+                    except:
+                        pass
+                
+                if self.thread_manager and self.thread_manager.executor:
+                    logger.warning("Forcing thread manager shutdown due to cleanup error")
+                    self.thread_manager.stop(wait=False)
+            except Exception as force_error:
+                logger.error(f"Force cleanup also failed: {force_error}")
     
     def get_version_info(self) -> Dict[str, str]:
         """Get version information"""
