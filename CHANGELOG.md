@@ -5,6 +5,155 @@ All notable changes to NetWalker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.34] - 2026-01-13
+
+### Enhanced
+- **Active Configuration Logging in Startup Banner**
+  - Added complete configuration dump to startup banner showing actual values being used
+  - Shows final merged configuration after defaults, INI file, and CLI overrides
+  - Includes all discovery, filtering, exclusion, output, connection, and logging settings
+  - Lists all hostname/IP exclusion patterns and platform/capability exclusions
+  - Makes troubleshooting configuration issues trivial - just look at the log
+
+### Impact
+- **Eliminates Configuration Confusion**
+  - Instantly see what max_discovery_depth is actually being used (not just what's in INI)
+  - Verify CLI overrides were applied correctly
+  - Identify which exclusions are active
+  - No more guessing about "why isn't my config working?"
+
+### Example Configuration Section
+```
+Active Configuration (after defaults, INI, and CLI overrides):
+
+  [Discovery]
+    max_discovery_depth: 99
+    discovery_timeout_seconds: 300
+    max_concurrent_connections: 5
+    connection_timeout_seconds: 30
+    enable_progress_tracking: True
+
+  [Exclusions]
+    platform_excludes: 3 items
+      - linux
+      - windows
+      - host
+    capability_excludes: 2 items
+      - camera
+      - printer
+```
+
+### Technical Details
+- Modified `log_startup_banner()` to accept optional config parameter
+- Organized configuration by logical sections (Discovery, Filtering, Exclusions, etc.)
+- Lists array items individually for easy verification
+- Shows counts for exclusion lists before listing items
+
+## [0.3.33] - 2026-01-13
+
+### Enhanced
+- **Startup Banner in Log Files**
+  - Added comprehensive startup information at the top of every log file
+  - Logs now include: version number, author, compile date, start time
+  - Execution details: executable path, working directory, full command line
+  - System information: Python version, platform
+  - Makes troubleshooting and version tracking much easier
+
+### Impact
+- **Improved Troubleshooting and Support**
+  - Instantly identify which version was run from log files
+  - See exact command line arguments used
+  - Know the working directory for path-related issues
+  - Verify Python version and platform for compatibility issues
+
+### Technical Details
+- Modified `netwalker/logging_config.py` to add `log_startup_banner()` function
+- Updated `netwalker/netwalker_app.py` to call banner after logging setup
+- Banner uses 80-character width with clear section separators
+- All information captured from `sys.argv`, `os.getcwd()`, and version module
+
+## [0.3.32] - 2026-01-13
+
+### Fixed
+- **Python Bytecode Cache Issue Causing Configuration Ignored**
+  - Identified and resolved issue where cached .pyc files caused old code to execute
+  - Symptoms: Config files correct, source code correct, but behavior showed old settings
+  - Root cause: 14 __pycache__ directories with 82 cached .pyc files from previous versions
+  - Created `clear_python_cache.ps1` script to automate cache cleanup
+  - Added comprehensive documentation in `DEPTH_LIMIT_INVESTIGATION_SUMMARY.md`
+
+### Enhanced
+- **Development Workflow Documentation**
+  - Added lessons learned about Python bytecode caching to steering files
+  - Documented prevention strategies: use `python -B` flag or run built executables
+  - Created diagnostic scripts: `diagnose_config_issue.py` and `test_config_loading.py`
+  - Improved troubleshooting guidance for configuration-related issues
+
+### Impact
+- **Ensures Configuration Changes Take Effect Immediately**
+  - max_depth setting now properly respected (was stuck at 1, should be 99)
+  - Devices at depth 2+ (like BORO-ROAM-SW01) now properly walked
+  - Full network topology discovery now works as configured
+  - Prevents confusion when config changes don't appear to work
+
+### Technical Details
+- Cache cleanup removes all __pycache__ directories and .pyc files
+- Verification confirms config loading works correctly with max_depth=99
+- Log should now show: "DiscoveryEngine initialized with max_depth=99"
+- All discovered devices up to configured depth limit will be walked
+
+## [0.3.30] - 2026-01-13
+
+### Fixed
+- **CRITICAL: Capability Filtering Issue Preventing Device Discovery**
+  - Removed 'phone' from default capability exclusions
+  - Root cause: Cisco Nexus switches and other network devices report 'phone' capability when they support IP phones via CDP
+  - This was incorrectly filtering out critical network infrastructure (Nexus 9000 series, etc.)
+  - Devices like LUMT-CORE-A and LUMV-CORE-A were being filtered, breaking discovery chains
+  - Now only excludes 'camera' and 'printer' capabilities by default
+
+### Enhanced
+- **Configuration File Documentation**
+  - Added explanatory comments about capability-based filtering
+  - Clarified that 'phone' capability doesn't mean the device IS a phone
+  - Provided guidance on proper exclusion strategies
+  - Updated both root and distribution package configurations
+
+### Impact
+- **Significantly improved discovery depth and completeness**
+  - Devices previously filtered at depth 2 are now properly walked
+  - Downstream devices at depth 3+ are now discoverable
+  - Full network topology can now be mapped correctly
+
+### Technical Details
+- Modified configuration files:
+  - Changed `exclude_capabilities` from `phone,camera,printer` to `camera,printer`
+  - Updated `netwalker.ini` and `dist/NetWalker_v0.3.30/netwalker.ini`
+  - Added comments explaining the rationale
+
+## [0.3.29] - 2026-01-13
+
+### Fixed
+- **Duplicate Sheets Prevention in Seed Workbooks**
+  - Improved device matching logic in Excel generator to prevent potential duplicate sheets
+  - Implemented two-pass matching: exact hostname matches preferred over partial matches
+  - Added duplicate sheet name detection and automatic renaming with numeric suffixes
+  - Fixed device matching in both neighbor details and filtering logic
+  - Root cause: Original logic could match same device multiple times when both FQDN and short hostname entries existed
+
+### Enhanced
+- **Excel Report Generation Reliability**
+  - Added tracking of created sheet names to prevent duplicates
+  - Improved consistency between device matching and filtering checks
+  - Better logging when duplicate sheet names are detected and renamed
+  - Safety measures ensure unique sheet names even in edge cases
+
+### Technical Details
+- Modified `netwalker/reports/excel_generator.py`:
+  - `_create_seed_neighbor_details_sheets()`: Two-pass device matching logic
+  - Added `created_sheet_names` set for duplicate prevention
+  - Automatic sheet name renaming with numeric suffixes when duplicates detected
+
 ## [0.3.4] - 2026-01-12
 
 ### Fixed

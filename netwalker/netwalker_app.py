@@ -187,6 +187,10 @@ class NetWalkerApp:
             log_level=getattr(logging, self.config.get('log_level', 'INFO'))
         )
         
+        # Log startup banner with version, execution information, and active configuration
+        from .logging_config import log_startup_banner
+        log_startup_banner(logger, config=self.config)
+        
         logger.info(f"Logging configured - directory: {log_directory}")
     
     def _initialize_credentials(self):
@@ -200,12 +204,31 @@ class NetWalkerApp:
         """Initialize connection management"""
         self.credentials = self.credential_manager.get_credentials()
         
+        # Validate credentials were successfully retrieved
+        if not self.credentials:
+            raise RuntimeError("Failed to retrieve valid credentials. Cannot proceed with network discovery.")
+        
         # Extract connection parameters from config
         ssh_port = self.config.get('ssh_port', 22)
         telnet_port = self.config.get('telnet_port', 23)
         timeout = self.config.get('connection_timeout_seconds', 30)
         
-        self.connection_manager = ConnectionManager(ssh_port, telnet_port, timeout)
+        # Extract SSL configuration from parsed config
+        parsed_config = self.config_manager.load_configuration()
+        ssl_verify = parsed_config['connection'].ssl_verify
+        ssl_cert_file = parsed_config['connection'].ssl_cert_file
+        ssl_key_file = parsed_config['connection'].ssl_key_file
+        ssl_ca_bundle = parsed_config['connection'].ssl_ca_bundle
+        
+        self.connection_manager = ConnectionManager(
+            ssh_port=ssh_port, 
+            telnet_port=telnet_port, 
+            timeout=timeout,
+            ssl_verify=ssl_verify,
+            ssl_cert_file=ssl_cert_file if ssl_cert_file else None,
+            ssl_key_file=ssl_key_file if ssl_key_file else None,
+            ssl_ca_bundle=ssl_ca_bundle if ssl_ca_bundle else None
+        )
         logger.info("Connection management initialized")
     
     def _initialize_filtering(self):
@@ -405,7 +428,9 @@ class NetWalkerApp:
             # Extract device hostnames and IP addresses
             devices = []
             for device_key, device_info in inventory.items():
-                hostname = device_info.get('hostname', '')
+                # Use cleaned hostname for DNS validation (removes serial numbers in parentheses)
+                raw_hostname = device_info.get('hostname', '')
+                hostname = self.excel_generator._clean_hostname(raw_hostname)
                 ip_address = self.excel_generator._extract_ip_address(device_key, device_info)
                 
                 if hostname and ip_address:
@@ -484,17 +509,41 @@ class NetWalkerApp:
             if self.connection_manager:
                 logger.info("Closing all active connections...")
                 try:
+                    # First attempt normal cleanup
                     self.connection_manager.close_all_connections()
-                    logger.info("All connections closed successfully")
+                    
+                    # Verify cleanup was successful
+                    remaining_connections = self.connection_manager.get_active_connection_count()
+                    if remaining_connections > 0:
+                        logger.warning(f"Normal cleanup left {remaining_connections} connections - attempting force cleanup")
+                        self.connection_manager.force_cleanup_connections()
+                    else:
+                        logger.info("All connections closed successfully")
+                        
                 except Exception as e:
-                    logger.warning(f"Error closing connections: {e}")
+                    logger.warning(f"Error during connection cleanup: {e}")
+                    # Try force cleanup if normal cleanup fails
+                    try:
+                        logger.warning("Attempting force cleanup due to normal cleanup failure")
+                        self.connection_manager.force_cleanup_connections()
+                    except Exception as force_error:
+                        logger.error(f"Force cleanup also failed: {force_error}")
             
             # Stop thread manager
             if self.thread_manager:
                 logger.info("Stopping thread manager...")
-                # Use a 30-second timeout to prevent hanging
-                self.thread_manager.stop(wait=True, timeout=30.0)
-                logger.info("Thread manager stopped successfully")
+                try:
+                    # Use a 30-second timeout to prevent hanging
+                    self.thread_manager.stop(wait=True, timeout=30.0)
+                    logger.info("Thread manager stopped successfully")
+                except Exception as e:
+                    logger.warning(f"Error stopping thread manager: {e}")
+                    # Try force stop
+                    try:
+                        self.thread_manager.stop(wait=False)
+                        logger.warning("Thread manager force stopped")
+                    except Exception as force_error:
+                        logger.error(f"Thread manager force stop failed: {force_error}")
             
             # Force garbage collection to help with cleanup
             import gc
@@ -506,26 +555,33 @@ class NetWalkerApp:
             logger.error(f"Error during cleanup: {e}")
             logger.exception("Cleanup error details:")
             
-            # If cleanup fails, try force cleanup
+            # If cleanup fails, try emergency cleanup
             try:
-                if self.connection_manager:
-                    logger.warning("Forcing connection manager shutdown due to cleanup error")
-                    # Force close connections without waiting
-                    try:
-                        hosts = list(self.connection_manager._active_connections.keys())
-                        for host in hosts:
-                            try:
-                                self.connection_manager.close_connection(host)
-                            except:
-                                pass
-                    except:
-                        pass
+                logger.error("Attempting emergency cleanup due to cleanup failure")
                 
-                if self.thread_manager and self.thread_manager.executor:
-                    logger.warning("Forcing thread manager shutdown due to cleanup error")
-                    self.thread_manager.stop(wait=False)
-            except Exception as force_error:
-                logger.error(f"Force cleanup also failed: {force_error}")
+                if self.connection_manager:
+                    logger.warning("Emergency: Forcing connection manager shutdown")
+                    try:
+                        self.connection_manager.force_cleanup_connections()
+                    except Exception as emergency_error:
+                        logger.error(f"Emergency connection cleanup failed: {emergency_error}")
+                
+                if self.thread_manager and hasattr(self.thread_manager, 'executor'):
+                    logger.warning("Emergency: Forcing thread manager shutdown")
+                    try:
+                        self.thread_manager.stop(wait=False)
+                    except Exception as emergency_error:
+                        logger.error(f"Emergency thread manager shutdown failed: {emergency_error}")
+                        
+                # Final garbage collection
+                import gc
+                gc.collect()
+                
+                logger.error("Emergency cleanup completed")
+                
+            except Exception as emergency_error:
+                logger.error(f"Emergency cleanup also failed: {emergency_error}")
+                # At this point, we've done everything we can
     
     def get_version_info(self) -> Dict[str, str]:
         """Get version information"""

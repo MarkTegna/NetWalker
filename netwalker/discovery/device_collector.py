@@ -10,14 +10,19 @@ from scrapli import Scrapli
 
 from netwalker.connection.data_models import DeviceInfo, NeighborInfo
 from .protocol_parser import ProtocolParser
+from netwalker.vlan.vlan_collector import VLANCollector
 
 
 class DeviceCollector:
     """Collects comprehensive device information during discovery"""
     
-    def __init__(self):
+    def __init__(self, config: Dict[str, Any] = None):
         self.logger = logging.getLogger(__name__)
         self.protocol_parser = ProtocolParser()
+        self.config = config or {}
+        
+        # Initialize VLAN collector if configuration is provided
+        self.vlan_collector = VLANCollector(self.config) if config else None
         
         # Regex patterns for parsing device information
         self.hostname_pattern = re.compile(r'^(\S+)\s+uptime is', re.MULTILINE | re.IGNORECASE)
@@ -89,6 +94,26 @@ class DeviceCollector:
                 error_details=None,
                 neighbors=neighbors
             )
+            
+            # Collect VLAN information if VLAN collector is available and enabled
+            if self.vlan_collector and self._should_collect_vlans():
+                try:
+                    self.logger.debug(f"Starting VLAN collection for device {hostname}")
+                    vlans = self.vlan_collector.collect_vlan_information(connection, device_info)
+                    device_info.vlans = vlans
+                    device_info.vlan_collection_status = "success" if vlans else "no_vlans_found"
+                    self.logger.info(f"VLAN collection completed for {hostname}: {len(vlans)} VLANs found")
+                except Exception as e:
+                    error_msg = f"VLAN collection failed: {str(e)}"
+                    self.logger.warning(f"VLAN collection failed for {hostname}: {error_msg}")
+                    device_info.vlan_collection_status = "failed"
+                    device_info.vlan_collection_error = error_msg
+            else:
+                device_info.vlan_collection_status = "skipped"
+                if not self.vlan_collector:
+                    self.logger.debug(f"VLAN collector not initialized for {hostname}")
+                elif not self._should_collect_vlans():
+                    self.logger.debug(f"VLAN collection disabled for {hostname}")
             
             self.logger.info(f"Successfully collected information for {hostname}")
             return device_info
@@ -427,6 +452,27 @@ class DeviceCollector:
             self.logger.error(f"Error collecting neighbors: {str(e)}")
             
         return neighbors
+    
+    def _should_collect_vlans(self) -> bool:
+        """
+        Check if VLAN collection should be performed based on configuration
+        
+        Returns:
+            True if VLAN collection is enabled, False otherwise
+        """
+        if not self.vlan_collector:
+            return False
+        
+        # Check configuration for VLAN collection
+        vlan_config = self.config.get('vlan_collection', {})
+        
+        # Handle both dictionary and VLANCollectionConfig object
+        if hasattr(vlan_config, 'enabled'):
+            # VLANCollectionConfig object
+            return vlan_config.enabled
+        else:
+            # Dictionary format
+            return vlan_config.get('enabled', True)
     
     def _create_failed_device_info(self, host: str, connection_method: str, 
                                  discovery_depth: int, is_seed: bool, 

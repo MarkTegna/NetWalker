@@ -21,12 +21,19 @@ class TestDiscoveryEngineProperties:
     def create_mock_components(self):
         """Create mock components for testing"""
         connection_manager = Mock(spec=ConnectionManager)
+        # Configure connection manager methods to return proper types
+        connection_manager.get_active_connection_count.return_value = 0
+        connection_manager.close_all_connections.return_value = None
+        connection_manager.log_connection_status.return_value = None
+        connection_manager.force_cleanup_connections.return_value = None
+        
         filter_manager = Mock(spec=FilterManager)
         config = {
             'max_discovery_depth': 3,
             'discovery_timeout_seconds': 60
         }
-        return connection_manager, filter_manager, config
+        credentials = Mock()  # Mock credentials object
+        return connection_manager, filter_manager, config, credentials
     
     @given(
         devices=st.lists(
@@ -46,12 +53,12 @@ class TestDiscoveryEngineProperties:
         Devices should be discovered in breadth-first order, with all devices
         at depth N discovered before any device at depth N+1.
         """
-        connection_manager, filter_manager, config = self.create_mock_components()
+        connection_manager, filter_manager, config, credentials = self.create_mock_components()
         
         # Mock filter manager to not filter any devices
         filter_manager.should_filter_device.return_value = False
         
-        discovery_engine = DiscoveryEngine(connection_manager, filter_manager, config)
+        discovery_engine = DiscoveryEngine(connection_manager, filter_manager, config, credentials)
         
         # Add devices as discovery nodes with different depths
         discovery_order = []
@@ -90,12 +97,12 @@ class TestDiscoveryEngineProperties:
         
         Devices beyond the maximum discovery depth should not be processed.
         """
-        connection_manager, filter_manager, config = self.create_mock_components()
+        connection_manager, filter_manager, config, credentials = self.create_mock_components()
         config['max_discovery_depth'] = max_depth
         
         filter_manager.should_filter_device.return_value = False
         
-        discovery_engine = DiscoveryEngine(connection_manager, filter_manager, config)
+        discovery_engine = DiscoveryEngine(connection_manager, filter_manager, config, credentials)
         
         # Create node at test depth
         node = DiscoveryNode(hostname, ip_address, device_depth)
@@ -145,10 +152,10 @@ class TestDiscoveryEngineProperties:
         """
         assume(error_device_index < len(devices))
         
-        connection_manager, filter_manager, config = self.create_mock_components()
+        connection_manager, filter_manager, config, credentials = self.create_mock_components()
         filter_manager.should_filter_device.return_value = False
         
-        discovery_engine = DiscoveryEngine(connection_manager, filter_manager, config)
+        discovery_engine = DiscoveryEngine(connection_manager, filter_manager, config, credentials)
         
         # Add all devices to queue
         for hostname, ip_address in devices:
@@ -157,18 +164,22 @@ class TestDiscoveryEngineProperties:
         # Mock connection behavior - make one device fail
         def mock_connect_and_discover(node):
             if devices.index((node.hostname, node.ip_address)) == error_device_index:
-                # This device fails
+                # This device fails - need to include hostname and ip_address
                 from netwalker.discovery.discovery_engine import DiscoveryResult
                 return DiscoveryResult(
+                    hostname=node.hostname,
+                    ip_address=node.ip_address,
                     device_info={},
                     neighbors=[],
                     success=False,
                     error_message="Connection failed"
                 )
             else:
-                # Other devices succeed
+                # Other devices succeed - need to include hostname and ip_address
                 from netwalker.discovery.discovery_engine import DiscoveryResult
                 return DiscoveryResult(
+                    hostname=node.hostname,
+                    ip_address=node.ip_address,
                     device_info={'hostname': node.hostname, 'ip_address': node.ip_address},
                     neighbors=[],
                     success=True
@@ -182,7 +193,7 @@ class TestDiscoveryEngineProperties:
         # Property: Discovery should complete despite errors
         assert results['total_devices'] == len(devices)
         assert results['failed_connections'] >= 1  # At least one failure
-        assert results['successful_connections'] >= len(devices) - 1  # Others succeed
+        assert results['successful_connections'] == len(devices) - 1  # Others succeed
         
         # Property: Failed device should be recorded
         error_hostname, error_ip = devices[error_device_index]

@@ -10,7 +10,6 @@ try {
     Write-Host "Found Python: $pythonVersion" -ForegroundColor Yellow
 } catch {
     Write-Host "Error: Python is not installed or not in PATH" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
@@ -23,7 +22,6 @@ try {
     }
 } catch {
     Write-Host "Error installing PyInstaller: $_" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
@@ -36,11 +34,9 @@ try {
     }
 } catch {
     Write-Host "Build failed: $_" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
 Write-Host ""
 Write-Host "Build completed successfully!" -ForegroundColor Green
 Write-Host "Check the dist directory for the executable and ZIP file." -ForegroundColor Yellow
-Read-Host "Press Enter to exit"

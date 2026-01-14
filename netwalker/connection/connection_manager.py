@@ -26,14 +26,29 @@ from .data_models import ConnectionResult, ConnectionMethod, ConnectionStatus
 class ConnectionManager:
     """Manages network device connections with SSH/Telnet fallback using scrapli and netmiko"""
     
-    def __init__(self, ssh_port: int = 22, telnet_port: int = 23, timeout: int = 30):
+    def __init__(self, ssh_port: int = 22, telnet_port: int = 23, timeout: int = 30, 
+                 ssl_verify: bool = False, ssl_cert_file: str = None, ssl_key_file: str = None, ssl_ca_bundle: str = None):
         self.ssh_port = ssh_port
         self.telnet_port = telnet_port
         self.timeout = timeout
+        self.ssl_verify = ssl_verify
+        self.ssl_cert_file = ssl_cert_file
+        self.ssl_key_file = ssl_key_file
+        self.ssl_ca_bundle = ssl_ca_bundle
         self.logger = logging.getLogger(__name__)
         self._active_connections: Dict[str, Any] = {}
         self._connection_locks: Dict[str, threading.Lock] = {}
         self._executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="netwalker-conn")
+        
+        # Log SSL configuration
+        if not self.ssl_verify:
+            self.logger.info("SSL certificate verification disabled")
+        else:
+            self.logger.info("SSL certificate verification enabled")
+            if self.ssl_cert_file:
+                self.logger.info(f"SSL certificate file: {self.ssl_cert_file}")
+            if self.ssl_ca_bundle:
+                self.logger.info(f"SSL CA bundle: {self.ssl_ca_bundle}")
         
         # Determine available connection methods
         self.available_methods = ["netmiko", "scrapli_telnet"]
@@ -57,6 +72,29 @@ class ConnectionManager:
             Tuple of (connection object, connection result)
         """
         start_time = time.time()
+        
+        # Validate credentials
+        if not credentials:
+            error_msg = "No credentials provided for connection"
+            self.logger.error(f"{error_msg} for {host}")
+            return None, ConnectionResult(
+                host=host,
+                method=ConnectionMethod.SSH,
+                status=ConnectionStatus.FAILED,
+                error_message=error_msg,
+                connection_time=0.0
+            )
+        
+        if not credentials.username or not credentials.password:
+            error_msg = "Invalid credentials: username or password is empty"
+            self.logger.error(f"{error_msg} for {host}")
+            return None, ConnectionResult(
+                host=host,
+                method=ConnectionMethod.SSH,
+                status=ConnectionStatus.FAILED,
+                error_message=error_msg,
+                connection_time=0.0
+            )
         
         # Ensure thread-safe connection management
         if host not in self._connection_locks:
@@ -109,7 +147,18 @@ class ConnectionManager:
                 'global_delay_factor': 1,
                 'fast_cli': True,  # Optimize for speed
                 'session_log': None,  # Disable session logging for performance
+                'allow_agent': False,  # Disable SSH agent
+                'use_keys': False,  # Disable SSH key authentication
             }
+            
+            # Add certificate files if provided
+            if self.ssl_cert_file:
+                device_params['key_file'] = self.ssl_cert_file
+                self.logger.debug(f"Using SSL certificate file: {self.ssl_cert_file}")
+            
+            if self.ssl_key_file:
+                device_params['key_file'] = self.ssl_key_file
+                self.logger.debug(f"Using SSL key file: {self.ssl_key_file}")
             
             # Add enable password if available
             if credentials.enable_password:
@@ -134,7 +183,8 @@ class ConnectionManager:
                 
         except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
             connection_time = time.time() - start_time
-            error_msg = f"Netmiko SSH connection failed: {str(e)}"
+            # Extract just the first line of the error message
+            error_msg = f"Netmiko SSH connection failed: {str(e).split(chr(10))[0]}"
             self.logger.warning(f"{error_msg} for {host}")
             
             return None, ConnectionResult(
@@ -146,7 +196,8 @@ class ConnectionManager:
             )
         except Exception as e:
             connection_time = time.time() - start_time
-            error_msg = f"Netmiko SSH connection failed with unexpected error: {str(e)}"
+            # Extract just the first line of the error message
+            error_msg = f"Netmiko SSH connection failed with unexpected error: {str(e).split(chr(10))[0]}"
             self.logger.warning(f"{error_msg} for {host}")
             
             return None, ConnectionResult(
@@ -181,7 +232,9 @@ class ConnectionManager:
                 return None
                 
         except Exception as e:
-            self.logger.error(f"Failed to establish netmiko connection: {str(e)}")
+            # Extract just the first line of the error message to avoid garbage text
+            error_msg = str(e).split('\n')[0]
+            self.logger.error(f"Failed to establish netmiko connection: {error_msg}")
             return None
     
     def _try_scrapli_telnet_connection(self, host: str, credentials: Credentials, start_time: float) -> Tuple[Optional[Scrapli], ConnectionResult]:
@@ -340,36 +393,56 @@ class ConnectionManager:
             try:
                 # Determine connection type and send appropriate exit commands
                 if hasattr(connection, 'send_command') and hasattr(connection, 'device_type'):
-                    # Netmiko connection - send exit and disconnect properly
+                    # Netmiko connection - send proper exit sequence
                     self.logger.debug(f"Closing netmiko connection to {host}")
                     try:
-                        # Try to send exit command with short timeout
-                        connection.send_command("exit", expect_string="", read_timeout=3)
-                    except:
-                        pass  # Exit command may cause connection to close immediately
+                        # Send multiple exit commands to ensure proper session termination
+                        connection.send_command("exit", expect_string="", read_timeout=2)
+                        connection.send_command("exit", expect_string="", read_timeout=2)
+                        # Send logout as additional cleanup
+                        connection.send_command("logout", expect_string="", read_timeout=2)
+                    except Exception as exit_error:
+                        self.logger.debug(f"Exit commands failed for {host}: {exit_error}")
+                        # Exit commands may cause connection to close immediately
                     
                     # Always call disconnect to ensure cleanup
-                    connection.disconnect()
+                    try:
+                        connection.disconnect()
+                        self.logger.debug(f"Netmiko disconnect successful for {host}")
+                    except Exception as disconnect_error:
+                        self.logger.debug(f"Netmiko disconnect failed for {host}: {disconnect_error}")
                     
                 elif hasattr(connection, 'send_command') and hasattr(connection, 'transport'):
                     # Scrapli connection
                     self.logger.debug(f"Closing scrapli connection to {host}")
                     try:
-                        # Try to send exit command with short timeout
+                        # Send exit commands to properly terminate session
                         connection.send_command("exit", expect_string="")
-                    except:
-                        pass  # Exit command may cause connection to close immediately
+                        connection.send_command("logout", expect_string="")
+                    except Exception as exit_error:
+                        self.logger.debug(f"Exit commands failed for {host}: {exit_error}")
+                        # Exit commands may cause connection to close immediately
                     
                     # Always call close to ensure cleanup
-                    connection.close()
+                    try:
+                        connection.close()
+                        self.logger.debug(f"Scrapli close successful for {host}")
+                    except Exception as close_error:
+                        self.logger.debug(f"Scrapli close failed for {host}: {close_error}")
                     
                 else:
                     self.logger.warning(f"Unknown connection type for {host}: {type(connection)}")
                     # Try generic close methods
                     if hasattr(connection, 'close'):
-                        connection.close()
+                        try:
+                            connection.close()
+                        except Exception as generic_close_error:
+                            self.logger.debug(f"Generic close failed for {host}: {generic_close_error}")
                     elif hasattr(connection, 'disconnect'):
-                        connection.disconnect()
+                        try:
+                            connection.disconnect()
+                        except Exception as generic_disconnect_error:
+                            self.logger.debug(f"Generic disconnect failed for {host}: {generic_disconnect_error}")
                         
             except Exception as e:
                 self.logger.debug(f"Error during graceful close for {host}: {str(e)}")
@@ -400,19 +473,59 @@ class ConnectionManager:
             return False
     
     def close_all_connections(self):
-        """Close all active connections with proper thread cleanup"""
+        """Close all active connections with proper thread cleanup and timeout handling"""
         hosts = list(self._active_connections.keys())
-        for host in hosts:
-            self.close_connection(host)
+        closed_count = 0
+        failed_count = 0
         
-        # Shutdown the thread pool executor with timeout
-        self.logger.info("Shutting down connection thread pool")
+        self.logger.info(f"Closing {len(hosts)} active connections...")
+        
+        for host in hosts:
+            try:
+                if self.close_connection(host):
+                    closed_count += 1
+                else:
+                    failed_count += 1
+            except Exception as e:
+                self.logger.error(f"Error closing connection to {host}: {e}")
+                failed_count += 1
+        
+        # Shutdown the thread pool executor with proper timeout handling
+        self.logger.info("Shutting down connection thread pool...")
         try:
-            # Try graceful shutdown with timeout
-            self._executor.shutdown(wait=True)
-            # Note: ThreadPoolExecutor.shutdown() doesn't accept timeout parameter
-            # but it should complete quickly since we closed all connections
-            self.logger.info("All connections and threads cleaned up successfully")
+            # First, try graceful shutdown with timeout
+            self._executor.shutdown(wait=False)  # Don't wait initially
+            
+            # Give threads a reasonable time to complete (30 seconds)
+            import concurrent.futures
+            import time
+            
+            shutdown_start = time.time()
+            timeout_seconds = 30
+            
+            while time.time() - shutdown_start < timeout_seconds:
+                # Check if all threads are done
+                if not any(thread.is_alive() for thread in self._executor._threads):
+                    break
+                time.sleep(0.1)  # Small delay to avoid busy waiting
+            
+            # If threads are still running after timeout, log warning
+            remaining_threads = [t for t in self._executor._threads if t.is_alive()]
+            if remaining_threads:
+                self.logger.warning(f"Thread pool shutdown timeout - {len(remaining_threads)} threads still running")
+                self.logger.warning("This may indicate connection cleanup issues")
+                
+                # Force shutdown without waiting
+                try:
+                    # Try to interrupt remaining threads
+                    for thread in remaining_threads:
+                        if hasattr(thread, '_stop'):
+                            thread._stop()
+                except Exception as thread_error:
+                    self.logger.debug(f"Error stopping threads: {thread_error}")
+            else:
+                self.logger.info("All connection threads terminated successfully")
+                
         except Exception as e:
             self.logger.warning(f"Error during connection thread pool shutdown: {e}")
             # Force shutdown if there's an issue
@@ -421,6 +534,20 @@ class ConnectionManager:
                 self.logger.info("Forced connection thread pool shutdown")
             except Exception as force_error:
                 self.logger.error(f"Force shutdown also failed: {force_error}")
+        
+        # Final cleanup verification
+        remaining_connections = len(self._active_connections)
+        if remaining_connections > 0:
+            self.logger.error(f"Connection cleanup incomplete - {remaining_connections} connections still tracked")
+            # Force clear the tracking dictionaries
+            self._active_connections.clear()
+            self._connection_locks.clear()
+        
+        self.logger.info(f"Connection cleanup complete - closed: {closed_count}, failed: {failed_count}")
+        
+        # Force garbage collection to help with cleanup
+        import gc
+        gc.collect()
     
     def get_active_connections(self) -> Dict[str, str]:
         """
@@ -451,3 +578,42 @@ class ConnectionManager:
                 self.logger.debug(f"  - ... and {active_count - 5} more")
         else:
             self.logger.debug("No active connections")
+    
+    def force_cleanup_connections(self):
+        """
+        Force cleanup of all connections without graceful termination.
+        Use only when normal cleanup fails.
+        """
+        self.logger.warning("Force cleanup of connections initiated")
+        
+        # Force close all tracked connections
+        connection_count = len(self._active_connections)
+        if connection_count > 0:
+            self.logger.warning(f"Force closing {connection_count} tracked connections")
+            
+            for host, connection in list(self._active_connections.items()):
+                try:
+                    # Try multiple cleanup methods without waiting
+                    if hasattr(connection, 'disconnect'):
+                        connection.disconnect()
+                    elif hasattr(connection, 'close'):
+                        connection.close()
+                except Exception as e:
+                    self.logger.debug(f"Force close failed for {host}: {e}")
+            
+            # Clear tracking dictionaries
+            self._active_connections.clear()
+            self._connection_locks.clear()
+        
+        # Force shutdown thread pool
+        try:
+            self._executor.shutdown(wait=False)
+            self.logger.warning("Thread pool force shutdown completed")
+        except Exception as e:
+            self.logger.error(f"Thread pool force shutdown failed: {e}")
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        self.logger.warning("Force cleanup completed")

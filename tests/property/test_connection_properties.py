@@ -113,14 +113,167 @@ def test_connection_termination():
         # Close connection
         success = connection_manager.close_connection("test-host")
         
-        # Verify exit command was sent
-        connection_instance.send_command.assert_called_with("exit", expect_string="")
+        # Verify multiple exit commands were sent for proper cleanup
+        exit_calls = [call for call in connection_instance.send_command.call_args_list 
+                     if 'exit' in str(call)]
+        logout_calls = [call for call in connection_instance.send_command.call_args_list 
+                       if 'logout' in str(call)]
+        
+        # Should have at least one exit command
+        assert len(exit_calls) >= 1, "At least one exit command should be sent"
         
         # Verify connection was closed
         connection_instance.close.assert_called_once()
         
         # Verify method returned success
         assert success is True, "Connection termination should return success"
+
+
+def test_netmiko_connection_termination():
+    """
+    Test proper termination of netmiko connections with multiple exit commands
+    """
+    credentials = Credentials(username="testuser", password="testpass")
+    connection_manager = ConnectionManager()
+    
+    with patch('netwalker.connection.connection_manager.ConnectHandler') as mock_netmiko:
+        # Setup successful netmiko connection
+        connection_instance = Mock()
+        connection_instance.send_command.return_value = "Router>"
+        connection_instance.disconnect.return_value = None
+        connection_instance.device_type = "cisco_ios"  # Identify as netmiko
+        mock_netmiko.return_value = connection_instance
+        
+        # Mock the thread executor
+        with patch.object(connection_manager, '_executor') as mock_executor:
+            future_mock = Mock()
+            future_mock.result.return_value = connection_instance
+            mock_executor.submit.return_value = future_mock
+            
+            # Establish connection
+            connection, result = connection_manager.connect_device("test-host", credentials)
+            assert result.status == ConnectionStatus.SUCCESS
+            
+            # Close connection
+            success = connection_manager.close_connection("test-host")
+            
+            # Verify multiple exit commands were sent
+            exit_calls = [call for call in connection_instance.send_command.call_args_list 
+                         if 'exit' in str(call)]
+            logout_calls = [call for call in connection_instance.send_command.call_args_list 
+                           if 'logout' in str(call)]
+            
+            # Should have multiple exit commands for netmiko
+            assert len(exit_calls) >= 2, "Multiple exit commands should be sent for netmiko"
+            assert len(logout_calls) >= 1, "Logout command should be sent for netmiko"
+            
+            # Verify disconnect was called
+            connection_instance.disconnect.assert_called_once()
+            
+            # Verify method returned success
+            assert success is True, "Netmiko connection termination should return success"
+
+
+def test_force_cleanup_connections():
+    """
+    Test force cleanup functionality when normal cleanup fails
+    """
+    credentials = Credentials(username="testuser", password="testpass")
+    connection_manager = ConnectionManager()
+    
+    with patch('netwalker.connection.connection_manager.Scrapli') as mock_scrapli:
+        # Setup connections that fail to close normally
+        connection_instance = Mock()
+        connection_instance.open.return_value = None
+        connection_instance.send_command.side_effect = Exception("Connection lost")
+        connection_instance.close.side_effect = Exception("Close failed")
+        connection_instance.disconnect.return_value = None  # But disconnect works
+        mock_scrapli.return_value = connection_instance
+        
+        # Establish multiple connections
+        hosts = ["host1", "host2", "host3"]
+        for host in hosts:
+            connection, result = connection_manager.connect_device(host, credentials)
+            assert result.status == ConnectionStatus.SUCCESS
+        
+        # Verify connections are tracked
+        assert connection_manager.get_active_connection_count() == 3
+        
+        # Force cleanup
+        connection_manager.force_cleanup_connections()
+        
+        # Verify all connections are cleared
+        assert connection_manager.get_active_connection_count() == 0
+        assert len(connection_manager._active_connections) == 0
+        assert len(connection_manager._connection_locks) == 0
+
+
+def test_connection_leak_detection():
+    """
+    Test that connection leaks are properly detected and logged
+    """
+    credentials = Credentials(username="testuser", password="testpass")
+    connection_manager = ConnectionManager()
+    
+    with patch('netwalker.connection.connection_manager.Scrapli') as mock_scrapli:
+        # Setup connection that doesn't close properly
+        connection_instance = Mock()
+        connection_instance.open.return_value = None
+        connection_instance.send_command.return_value = Mock()
+        connection_instance.close.side_effect = Exception("Close failed")
+        mock_scrapli.return_value = connection_instance
+        
+        # Establish connection
+        connection, result = connection_manager.connect_device("test-host", credentials)
+        assert result.status == ConnectionStatus.SUCCESS
+        
+        # Verify connection is tracked
+        assert connection_manager.get_active_connection_count() == 1
+        
+        # Attempt to close (will fail)
+        success = connection_manager.close_connection("test-host")
+        
+        # Connection should still be tracked (leak detected)
+        # But the tracking should be cleared even if close fails
+        assert connection_manager.get_active_connection_count() == 0, "Connection tracking should be cleared even on close failure"
+
+
+@given(
+    connection_count=st.integers(min_value=1, max_value=10)
+)
+def test_multiple_connection_cleanup(connection_count):
+    """
+    Property test: For any number of connections, all should be properly cleaned up
+    """
+    credentials = Credentials(username="testuser", password="testpass")
+    connection_manager = ConnectionManager()
+    
+    with patch('netwalker.connection.connection_manager.Scrapli') as mock_scrapli:
+        # Setup successful connections
+        connection_instance = Mock()
+        connection_instance.open.return_value = None
+        connection_instance.send_command.return_value = Mock()
+        connection_instance.close.return_value = None
+        mock_scrapli.return_value = connection_instance
+        
+        # Establish multiple connections
+        hosts = [f"host{i}" for i in range(connection_count)]
+        
+        for host in hosts:
+            connection, result = connection_manager.connect_device(host, credentials)
+            assert result.status == ConnectionStatus.SUCCESS
+        
+        # Verify all connections are tracked
+        assert connection_manager.get_active_connection_count() == connection_count
+        
+        # Close all connections
+        connection_manager.close_all_connections()
+        
+        # Verify all connections are closed
+        assert connection_manager.get_active_connection_count() == 0
+        
+        # Verify close was called for each connection
+        assert connection_instance.close.call_count >= connection_count
 
 
 def test_platform_detection_command_execution():

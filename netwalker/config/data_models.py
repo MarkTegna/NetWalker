@@ -66,7 +66,38 @@ class OutputConfig:
     logs_directory: str = "./logs"
     excel_format: str = "xlsx"
     visio_enabled: bool = True
-    site_boundary_pattern: str = "*-CORE-*"
+    site_boundary_pattern: Optional[str] = "*-CORE-*"
+    
+    def __post_init__(self):
+        """Validate configuration after initialization"""
+        # Validate that None is accepted as a valid disabled state for site boundary pattern
+        # This is intentional - None means site boundary detection is disabled
+        if self.site_boundary_pattern is not None and not isinstance(self.site_boundary_pattern, str):
+            raise ValueError("site_boundary_pattern must be a string or None")
+        
+        # If it's a string, ensure it's not just whitespace (should have been handled by ConfigurationBlankHandler)
+        if isinstance(self.site_boundary_pattern, str) and self.site_boundary_pattern.strip() == "":
+            # This should not happen if ConfigurationBlankHandler is used correctly
+            # But we'll handle it gracefully by converting to None
+            self.site_boundary_pattern = None
+    
+    def is_site_boundary_detection_enabled(self) -> bool:
+        """
+        Check if site boundary detection is enabled.
+        
+        Returns:
+            bool: True if site boundary detection is enabled, False if disabled
+        """
+        return self.site_boundary_pattern is not None
+    
+    def get_effective_site_boundary_pattern(self) -> Optional[str]:
+        """
+        Get the effective site boundary pattern.
+        
+        Returns:
+            Optional[str]: The pattern if enabled, None if disabled
+        """
+        return self.site_boundary_pattern
 
 
 @dataclass
@@ -75,3 +106,21 @@ class ConnectionConfig:
     ssh_port: int = 22
     telnet_port: int = 23
     preferred_method: str = "ssh"
+    ssl_verify: bool = False
+    ssl_cert_file: Optional[str] = None
+    ssl_key_file: Optional[str] = None
+    ssl_ca_bundle: Optional[str] = None
+
+
+@dataclass
+class VLANCollectionConfig:
+    """Configuration for VLAN collection parameters"""
+    enabled: bool = True
+    command_timeout: int = 30
+    max_retries: int = 2
+    include_inactive_vlans: bool = True
+    platforms_to_skip: List[str] = None
+    
+    def __post_init__(self):
+        if self.platforms_to_skip is None:
+            self.platforms_to_skip = []

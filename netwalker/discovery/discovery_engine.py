@@ -178,8 +178,66 @@ class DiscoveryEngine:
         
         # Initialize components
         self.protocol_parser = ProtocolParser()
-        self.device_collector = DeviceCollector()
+        self.device_collector = DeviceCollector(config)
         self.inventory = DeviceInventory()
+        
+        # Site collection integration
+        # Get site boundary pattern - handle multiple config formats for compatibility
+        self.site_boundary_pattern = None
+        
+        # First, try to get from nested output config (new format from config manager)
+        if 'output' in config and isinstance(config['output'], dict):
+            self.site_boundary_pattern = config['output'].get('site_boundary_pattern')
+        # Then try flat config format (backward compatibility)
+        elif 'site_boundary_pattern' in config:
+            self.site_boundary_pattern = config.get('site_boundary_pattern')
+        
+        # Apply default pattern if no pattern was found (backward compatibility)
+        # The configuration manager handles blank detection and returns None for blank patterns
+        if self.site_boundary_pattern is None:
+            # Check if pattern was explicitly provided as None (disabled) vs missing
+            if ('output' in config and 'site_boundary_pattern' in config['output']) or 'site_boundary_pattern' in config:
+                # Pattern was explicitly provided as None - keep as None (disabled)
+                logger.info("Site boundary pattern explicitly disabled (None value)")
+            else:
+                # Pattern was missing - apply default for backward compatibility
+                self.site_boundary_pattern = '*-CORE-*'
+                logger.info("Site boundary pattern missing from configuration, applying default: *-CORE-*")
+        elif isinstance(self.site_boundary_pattern, str):
+            # Process string patterns through ConfigurationBlankHandler for blank detection with Unicode support
+            from ..config.blank_detection import ConfigurationBlankHandler
+            processed_pattern = ConfigurationBlankHandler.process_site_boundary_pattern_with_unicode(
+                self.site_boundary_pattern,
+                default_pattern="*-CORE-*",
+                logger=logger
+            )
+            self.site_boundary_pattern = processed_pattern
+        
+        # Determine if site collection should be enabled
+        # Site collection is enabled only if:
+        # 1. enable_site_collection is True (default is False - must be explicitly enabled)
+        # 2. site_boundary_pattern is not None (not disabled by blank pattern)
+        base_site_collection_enabled = config.get('enable_site_collection', False)
+        pattern_allows_site_collection = self.site_boundary_pattern is not None
+        
+        self.site_collection_enabled = base_site_collection_enabled and pattern_allows_site_collection
+        
+        if self.site_collection_enabled:
+            from .site_specific_collection_manager import SiteSpecificCollectionManager
+            self.site_collection_manager = SiteSpecificCollectionManager(
+                connection_manager, self.device_collector, config, credentials, self.site_boundary_pattern
+            )
+            logger.info(f"Site collection enabled with pattern: {self.site_boundary_pattern}")
+        else:
+            self.site_collection_manager = None
+            if not pattern_allows_site_collection:
+                logger.info("Site collection disabled due to blank site boundary pattern - using global collection mode")
+            else:
+                logger.info("Site collection disabled by configuration - using global collection mode")
+        
+        # Site collection state
+        self.site_boundaries: Dict[str, List[str]] = {}
+        self.site_collection_results: Dict[str, Dict[str, Any]] = {}
         
         # Discovery state
         self.discovery_queue: deque[DiscoveryNode] = deque()
@@ -190,6 +248,10 @@ class DiscoveryEngine:
         self.total_devices_discovered = 0
         self.devices_processed = 0
         self.progress_enabled = config.get('enable_progress_tracking', True)
+        
+        # Queue progress tracking
+        self.total_queued = 0  # Total devices added to queue (after dedupe)
+        self.total_completed = 0  # Total devices completed (removed from queue)
         
         # Timeout management for large networks
         self.discovery_start_time: Optional[float] = None
@@ -217,6 +279,7 @@ class DiscoveryEngine:
         
         self.discovery_queue.append(seed_node)
         self.total_devices_discovered += 1
+        self.total_queued += 1  # Increment total queued
         logger.info(f"Added seed device: {seed_node.device_key}")
         self._update_progress_display()
     
@@ -262,12 +325,28 @@ class DiscoveryEngine:
                 # Discover device
                 self._discover_device(current_node)
                 
+                # Update completed count after device is processed
+                self.total_completed += 1
+                
                 # Monitor connection status periodically
                 if self.devices_processed % 10 == 0:  # Every 10 devices
                     active_connections = self.connection_manager.get_active_connection_count()
                     if active_connections > 0:
                         logger.warning(f"[CONNECTION LEAK] {active_connections} connections still active after device processing")
                         self.connection_manager.log_connection_status()
+                        
+                        # If we have too many leaked connections, try to clean them up
+                        if active_connections > 5:
+                            logger.error(f"[CONNECTION LEAK CRITICAL] {active_connections} leaked connections detected - attempting cleanup")
+                            try:
+                                self.connection_manager.close_all_connections()
+                                remaining = self.connection_manager.get_active_connection_count()
+                                if remaining > 0:
+                                    logger.error(f"[CONNECTION LEAK CLEANUP] {remaining} connections still remain after cleanup attempt")
+                                else:
+                                    logger.info("[CONNECTION LEAK CLEANUP] All leaked connections successfully cleaned up")
+                            except Exception as cleanup_error:
+                                logger.error(f"[CONNECTION LEAK CLEANUP] Cleanup failed: {cleanup_error}")
                 
                 # Update progress after processing device
                 self.devices_processed += 1
@@ -277,17 +356,43 @@ class DiscoveryEngine:
             if not self.discovery_queue:
                 logger.info(f"[DISCOVERY COMPLETE] Queue empty - all devices processed")
             
+            # After main discovery, perform site-specific collection if enabled
+            if self.site_collection_enabled and self.site_collection_manager and self.site_boundary_pattern is not None:
+                logger.info("[SITE COLLECTION] Starting site-specific device collection")
+                self._perform_site_collection()
+            else:
+                if self.site_boundary_pattern is None:
+                    logger.info("[SITE COLLECTION] Skipping site collection - disabled due to blank site boundary pattern")
+                elif not self.site_collection_enabled:
+                    logger.info("[SITE COLLECTION] Skipping site collection - disabled by configuration")
+                else:
+                    logger.info("[SITE COLLECTION] Skipping site collection - site collection manager not initialized")
+            
         except Exception as e:
             logger.error(f"Discovery engine error: {e}")
             raise
         
         discovery_time = time.time() - self.discovery_start_time
         
-        # Final connection status check
+        # Final connection status check and cleanup
         active_connections = self.connection_manager.get_active_connection_count()
         if active_connections > 0:
             logger.error(f"[CONNECTION LEAK] {active_connections} connections still active after discovery completion!")
             self.connection_manager.log_connection_status()
+            
+            # Force cleanup any remaining connections
+            logger.warning("[CONNECTION CLEANUP] Forcing cleanup of remaining connections")
+            try:
+                self.connection_manager.close_all_connections()
+                final_count = self.connection_manager.get_active_connection_count()
+                if final_count > 0:
+                    logger.error(f"[CONNECTION CLEANUP FAILED] {final_count} connections still remain after force cleanup")
+                    # Last resort - force cleanup
+                    self.connection_manager.force_cleanup_connections()
+                else:
+                    logger.info("[CONNECTION CLEANUP] All remaining connections successfully cleaned up")
+            except Exception as cleanup_error:
+                logger.error(f"[CONNECTION CLEANUP ERROR] Force cleanup failed: {cleanup_error}")
         else:
             logger.info("[CONNECTION STATUS] All connections properly closed during discovery")
         
@@ -334,8 +439,9 @@ class DiscoveryEngine:
                 logger.info(f"  [FILTERED] Device {device_key} will be marked as boundary (not discovered)")
                 self.filter_manager.mark_as_boundary(node.hostname, node.ip_address, "Filtered device")
                 
-                # Add to inventory as filtered
+                # Add to inventory as filtered with skip reason
                 device_info = self._create_basic_device_info(node, "filtered")
+                device_info['skip_reason'] = "Filtered by hostname or IP address pattern"
                 self.inventory.add_device(device_key, device_info, "filtered")
                 logger.info(f"  [INVENTORY] Added {device_key} to inventory as FILTERED")
                 return
@@ -365,12 +471,13 @@ class DiscoveryEngine:
                         f"Filtered after connection - platform: {device_platform}, capabilities: {device_capabilities}"
                     )
                     
-                    # Add to inventory as filtered
+                    # Add to inventory as filtered with skip reason
                     device_info = self._create_basic_device_info(node, "filtered")
                     device_info.update({
                         'platform': device_platform,
                         'capabilities': device_capabilities,
-                        'filter_reason': 'Filtered after connection based on platform/capabilities'
+                        'filter_reason': 'Filtered after connection based on platform/capabilities',
+                        'skip_reason': f"Filtered by platform ({device_platform}) or capabilities ({', '.join(device_capabilities) if device_capabilities else 'none'})"
                     })
                     self.inventory.add_device(device_key, device_info, "filtered")
                     logger.info(f"  [INVENTORY] Added {device_key} to inventory as FILTERED (post-connection)")
@@ -548,14 +655,25 @@ class DiscoveryEngine:
                 'connection_method': device_info.connection_method,
                 'connection_status': device_info.connection_status,
                 'error_details': device_info.error_details,
-                'neighbors': device_info.neighbors  # Store the NeighborInfo objects directly
+                'neighbors': device_info.neighbors,  # Store the NeighborInfo objects directly
+                'vlans': device_info.vlans,  # Store the VLANInfo objects directly
+                'vlan_collection_status': device_info.vlan_collection_status,
+                'vlan_collection_error': device_info.vlan_collection_error
             }
             
             # Get neighbors from DeviceInfo object
             neighbors = device_info.neighbors
             
             # Close connection using the same key that was used to create it
-            self.connection_manager.close_connection(node.ip_address)
+            # CRITICAL: Always close connection immediately after use to prevent leaks
+            try:
+                connection_closed = self.connection_manager.close_connection(node.ip_address)
+                if not connection_closed:
+                    self.logger.warning(f"Failed to close connection to {node.ip_address} - may cause connection leak")
+                else:
+                    self.logger.debug(f"Connection to {node.ip_address} closed successfully")
+            except Exception as close_error:
+                self.logger.error(f"Error closing connection to {node.ip_address}: {close_error}")
             
             return DiscoveryResult(
                 hostname=node.hostname,
@@ -633,12 +751,13 @@ class DiscoveryEngine:
                     f"Filtered by platform ({neighbor_platform}) or capabilities ({neighbor_capabilities})"
                 )
                 
-                # Add to inventory as filtered
+                # Add to inventory as filtered with skip reason
                 device_info = self._create_basic_device_info_for_neighbor(
                     neighbor_hostname, neighbor_ip, parent_node.depth + 1, 
                     protocol, parent_node.device_key, "filtered", 
                     neighbor_platform, neighbor_capabilities
                 )
+                device_info['skip_reason'] = f"Filtered by platform ({neighbor_platform}) or capabilities ({', '.join(neighbor_capabilities) if neighbor_capabilities else 'none'})"
                 self.inventory.add_device(f"{neighbor_hostname}:{neighbor_ip}", device_info, "filtered")
                 continue
             
@@ -654,8 +773,8 @@ class DiscoveryEngine:
             )
             
             logger.info(f"    [NEIGHBOR CHECK] Checking if {neighbor_node.device_key} should be queued")
-            logger.info(f"      Current discovered_devices: {list(self.discovered_devices)}")
-            logger.info(f"      Current queue devices: {[n.device_key for n in self.discovery_queue]}")
+            logger.debug(f"      Current discovered_devices: {list(self.discovered_devices)}")
+            logger.debug(f"      Current queue devices: {[n.device_key for n in self.discovery_queue]}")
             
             # Skip if already discovered or queued
             if neighbor_node.device_key in self.discovered_devices:
@@ -669,12 +788,21 @@ class DiscoveryEngine:
             # Check depth limit
             if neighbor_node.depth > self.max_depth:
                 logger.info(f"    [NEIGHBOR DEPTH LIMIT] {neighbor_node.device_key} at depth {neighbor_node.depth} exceeds max_depth {self.max_depth}")
+                # Add to inventory with skip reason
+                device_info = self._create_basic_device_info_for_neighbor(
+                    neighbor_hostname, neighbor_ip, parent_node.depth + 1, 
+                    protocol, parent_node.device_key, "skipped", 
+                    neighbor_platform, neighbor_capabilities
+                )
+                device_info['skip_reason'] = f"Depth limit exceeded (depth {neighbor_node.depth} > max {self.max_depth})"
+                self.inventory.add_device(f"{neighbor_hostname}:{neighbor_ip}", device_info, "skipped")
                 continue
             
             # Add to discovery queue
             self.discovery_queue.append(neighbor_node)
             new_devices_added += 1
             self.total_devices_discovered += 1
+            self.total_queued += 1  # Increment total queued after dedupe
             logger.info(f"    [NEIGHBOR QUEUED] Added {neighbor_node.device_key} to discovery queue (depth {neighbor_node.depth})")
             logger.info(f"      Queue size after addition: {len(self.discovery_queue)}")
             logger.debug(f"Added neighbor {neighbor_node.device_key} to discovery queue "
@@ -725,32 +853,28 @@ class DiscoveryEngine:
     def _update_progress_display(self):
         """
         Update and display discovery progress information.
-        Shows current progress with device count and percentage completion.
+        Shows queue progress: (completed / total) = percent complete
         """
         if not self.progress_enabled:
             return
         
-        queue_size = len(self.discovery_queue)
-        
-        if self.total_devices_discovered > 0:
-            percentage = (self.devices_processed / self.total_devices_discovered) * 100
+        # Calculate queue progress
+        if self.total_queued > 0:
+            remaining = self.total_queued - self.total_completed
+            percent_complete = (self.total_completed / self.total_queued) * 100
             
-            # Create progress message
-            progress_msg = (f"[PROGRESS] Processing device {self.devices_processed} of "
-                          f"{self.total_devices_discovered} ({percentage:.1f}% complete) - "
-                          f"Queue: {queue_size} remaining")
+            # Create unified queue status message with visual markers
+            # Shows: completed of total (percent complete) with remaining in queue
+            queue_status = f"****** ({self.total_completed} of {self.total_queued}) {percent_complete:.1f}% complete - {remaining} remaining ******"
             
-            # Log to file
-            logger.info(progress_msg)
-            
-            # Also print directly to console for immediate visibility
-            print(progress_msg)
+            # Log to file and console
+            logger.info(queue_status)
         else:
             # Initial state - just show queue size
+            queue_size = len(self.discovery_queue)
             if queue_size > 0:
-                initial_msg = f"[PROGRESS] Discovery starting - Queue: {queue_size} devices to process"
+                initial_msg = f"****** Discovery starting - {queue_size} devices to process ******"
                 logger.info(initial_msg)
-                print(initial_msg)
     
     def _create_basic_device_info(self, node: DiscoveryNode, status: str) -> Dict[str, Any]:
         """Create basic device info for failed/filtered devices"""
@@ -828,3 +952,264 @@ class DiscoveryEngine:
     def get_failed_devices(self) -> Set[str]:
         """Get set of failed device keys"""
         return self.failed_devices.copy()
+    
+    def _perform_site_collection(self):
+        """
+        Perform site-specific device collection after main discovery.
+        
+        This method identifies site boundaries from discovered devices and
+        performs additional collection within each site to ensure complete
+        topology mapping.
+        
+        Note: This method is only called when site collection is enabled.
+        If site boundary pattern is None/blank, site collection is disabled
+        and this method will not be called.
+        """
+        # Double-check that site collection is enabled and we have a valid pattern
+        if not self.site_collection_enabled or self.site_boundary_pattern is None:
+            logger.info("[SITE COLLECTION] Site collection is disabled - skipping site-specific collection")
+            return
+        
+        logger.info("[SITE COLLECTION] Identifying site boundaries from discovered devices")
+        
+        # Identify site boundaries from discovered devices
+        self.site_boundaries = self._identify_site_boundaries_from_inventory()
+        
+        if not self.site_boundaries:
+            logger.info("[SITE COLLECTION] No site boundaries detected, skipping site collection")
+            return
+        
+        logger.info(f"[SITE COLLECTION] Found {len(self.site_boundaries)} site boundaries: {list(self.site_boundaries.keys())}")
+        
+        # Initialize site queues with discovered devices
+        site_queues = self.site_collection_manager.initialize_site_queues(self.site_boundaries)
+        
+        # Collect devices for each site
+        for site_name in self.site_boundaries.keys():
+            logger.info(f"[SITE COLLECTION] Starting collection for site '{site_name}'")
+            
+            try:
+                # Update site queue with actual IP addresses from inventory
+                self._update_site_queue_with_inventory(site_name)
+                
+                # Perform site collection
+                collection_result = self.site_collection_manager.collect_site_devices(site_name)
+                self.site_collection_results[site_name] = collection_result
+                
+                # Merge site inventory into main inventory
+                self._merge_site_inventory_to_main(site_name, collection_result)
+                
+                logger.info(f"[SITE COLLECTION] Completed collection for site '{site_name}': {collection_result['statistics']}")
+                
+            except Exception as e:
+                logger.error(f"[SITE COLLECTION] Error during collection for site '{site_name}': {e}")
+                self.site_collection_results[site_name] = {
+                    'site_name': site_name,
+                    'success': False,
+                    'error_message': str(e)
+                }
+        
+        logger.info("[SITE COLLECTION] Site-specific collection completed")
+    
+    def _identify_site_boundaries_from_inventory(self) -> Dict[str, List[str]]:
+        """
+        Identify site boundaries from the current device inventory.
+        
+        Returns:
+            Dictionary mapping site names to lists of device hostnames
+        """
+        site_boundaries = {}
+        
+        # Get all devices from inventory
+        all_devices = self.inventory.get_all_devices()
+        
+        for device_key, device_info in all_devices.items():
+            hostname = device_info.get('hostname', '')
+            if not hostname:
+                continue
+            
+            # Check if device matches site boundary pattern
+            if self._matches_site_boundary_pattern(hostname):
+                site_name = self._extract_site_name_from_hostname(hostname)
+                
+                if site_name not in site_boundaries:
+                    site_boundaries[site_name] = []
+                
+                site_boundaries[site_name].append(hostname)
+                logger.debug(f"[SITE BOUNDARIES] Device {hostname} assigned to site '{site_name}'")
+        
+        return site_boundaries
+    
+    def _matches_site_boundary_pattern(self, hostname: str) -> bool:
+        """
+        Check if hostname matches the site boundary pattern.
+        
+        Args:
+            hostname: Device hostname to check
+            
+        Returns:
+            True if hostname matches pattern, False otherwise
+            
+        Note: If site_boundary_pattern is None (disabled), this always returns False
+        """
+        # If site boundary pattern is None (disabled), no hostnames match
+        if self.site_boundary_pattern is None:
+            return False
+        
+        import fnmatch
+        
+        # Clean hostname for pattern matching
+        clean_hostname = self._clean_hostname_for_pattern(hostname)
+        
+        # Convert wildcard pattern to fnmatch format
+        pattern = self.site_boundary_pattern.replace('*', '*')
+        
+        return fnmatch.fnmatch(clean_hostname, pattern)
+    
+    def _extract_site_name_from_hostname(self, hostname: str) -> str:
+        """
+        Extract site name from hostname based on site boundary pattern.
+        
+        Args:
+            hostname: Device hostname
+            
+        Returns:
+            Site name extracted from hostname
+        """
+        # Clean hostname
+        clean_hostname = self._clean_hostname_for_pattern(hostname)
+        
+        # For pattern like '*-CORE-*', extract the part before '-CORE-'
+        if '-CORE-' in clean_hostname:
+            return clean_hostname.split('-CORE-')[0]
+        elif '-RTR-' in clean_hostname:
+            return clean_hostname.split('-RTR-')[0]
+        elif '-SW-' in clean_hostname:
+            return clean_hostname.split('-SW-')[0]
+        elif '-MDF-' in clean_hostname:
+            return clean_hostname.split('-MDF-')[0]
+        else:
+            # Fallback: use first part of hostname
+            parts = clean_hostname.split('-')
+            return parts[0] if parts else clean_hostname
+    
+    def _clean_hostname_for_pattern(self, hostname: str) -> str:
+        """
+        Clean hostname for pattern matching.
+        
+        Args:
+            hostname: Raw hostname
+            
+        Returns:
+            Cleaned hostname suitable for pattern matching
+        """
+        if not hostname:
+            return ""
+        
+        # Remove domain suffix if present
+        if '.' in hostname:
+            hostname = hostname.split('.')[0]
+        
+        # Convert to uppercase for consistent matching
+        return hostname.upper()
+    
+    def _update_site_queue_with_inventory(self, site_name: str):
+        """
+        Update site queue devices with actual IP addresses from inventory.
+        
+        Args:
+            site_name: Name of the site to update
+        """
+        if site_name not in self.site_boundaries:
+            return
+        
+        # Get site queue manager
+        site_queue_manager = self.site_collection_manager.site_queue_manager
+        
+        # Clear existing queue and rebuild with proper IP addresses
+        site_queue_manager._site_queues[site_name].clear()
+        site_queue_manager._site_device_sets[site_name].clear()
+        
+        # Add devices with correct IP addresses from inventory
+        for hostname in self.site_boundaries[site_name]:
+            # Find device in inventory by hostname
+            device_info = None
+            device_key = None
+            
+            for key, info in self.inventory.get_all_devices().items():
+                if info.get('hostname', '').upper() == hostname.upper():
+                    device_info = info
+                    device_key = key
+                    break
+            
+            if device_info and device_key:
+                # Extract IP address
+                ip_address = device_info.get('ip_address') or device_info.get('primary_ip', '0.0.0.0')
+                
+                # Create discovery node with correct IP
+                device_node = DiscoveryNode(
+                    hostname=hostname,
+                    ip_address=ip_address,
+                    depth=0,
+                    discovery_method="site_boundary",
+                    is_seed=True
+                )
+                
+                # Add to site queue
+                site_queue_manager.add_device_to_site(site_name, device_node)
+                logger.debug(f"[SITE QUEUE UPDATE] Added {hostname}:{ip_address} to site '{site_name}' queue")
+    
+    def _merge_site_inventory_to_main(self, site_name: str, collection_result: Dict[str, Any]):
+        """
+        Merge site collection results into main inventory.
+        
+        Args:
+            site_name: Name of the site
+            collection_result: Site collection results
+        """
+        if not collection_result.get('success', False):
+            logger.warning(f"[SITE MERGE] Skipping merge for failed site collection: {site_name}")
+            return
+        
+        site_inventory = collection_result.get('inventory', {})
+        
+        for device_key, device_info in site_inventory.items():
+            # Check if device already exists in main inventory
+            if self.inventory.has_device(device_key):
+                # Update existing device with additional information from site collection
+                existing_info = self.inventory.get_device(device_key)
+                
+                # Merge neighbor information if site collection found more neighbors
+                site_neighbors = device_info.get('neighbors', [])
+                existing_neighbors = existing_info.get('neighbors', [])
+                
+                if len(site_neighbors) > len(existing_neighbors):
+                    logger.info(f"[SITE MERGE] Updating {device_key} with {len(site_neighbors)} neighbors from site collection")
+                    existing_info['neighbors'] = site_neighbors
+                    existing_info['site_collection_enhanced'] = True
+                    
+                    # Update device in inventory
+                    self.inventory.add_device(device_key, existing_info, "connected")
+            else:
+                # Add new device discovered during site collection
+                logger.info(f"[SITE MERGE] Adding new device {device_key} discovered during site collection")
+                device_info['discovered_by_site_collection'] = True
+                self.inventory.add_device(device_key, device_info, "connected")
+    
+    def get_site_collection_results(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get site collection results.
+        
+        Returns:
+            Dictionary mapping site names to their collection results
+        """
+        return self.site_collection_results.copy()
+    
+    def get_site_boundaries(self) -> Dict[str, List[str]]:
+        """
+        Get identified site boundaries.
+        
+        Returns:
+            Dictionary mapping site names to lists of device hostnames
+        """
+        return self.site_boundaries.copy()

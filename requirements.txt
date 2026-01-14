@@ -2,12 +2,18 @@
 scrapli>=2023.1.30
 scrapli-community>=2021.01.30
 netmiko>=4.3.0
+paramiko>=4.0.0
 openpyxl>=3.1.0
 hypothesis>=6.82.0
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 configparser>=5.3.0
 ipaddress>=1.0.23
+
+# Additional netmiko dependencies
+ntc-templates>=3.1.0
+rich>=13.8
+ruamel.yaml>=0.17
 
 # Build Dependencies
 pyinstaller>=5.13.0

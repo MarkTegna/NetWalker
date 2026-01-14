@@ -10,8 +10,9 @@ from typing import Dict, Any, Optional
 
 from .data_models import (
     DiscoveryConfig, FilterConfig, OutputConfig, 
-    ExclusionConfig, ConnectionConfig
+    ExclusionConfig, ConnectionConfig, VLANCollectionConfig
 )
+from .blank_detection import ConfigurationBlankHandler
 
 
 class ConfigurationManager:
@@ -51,7 +52,8 @@ class ConfigurationManager:
             'filtering': self._build_filter_config(),
             'exclusions': self._build_exclusion_config(),
             'output': self._build_output_config(),
-            'connection': self._build_connection_config()
+            'connection': self._build_connection_config(),
+            'vlan_collection': self._build_vlan_collection_config()
         }
         
         self.logger.info(f"Configuration loaded from {self.config_file}")
@@ -118,6 +120,26 @@ ssh_port = 22
 telnet_port = 23
 # Preferred connection method (ssh/telnet)
 preferred_method = ssh
+# SSL certificate verification (true/false)
+ssl_verify = false
+# SSL certificate file path (optional)
+ssl_cert_file = 
+# SSL key file path (optional)
+ssl_key_file = 
+# SSL CA bundle file path (optional)
+ssl_ca_bundle = 
+
+[vlan_collection]
+# Enable VLAN collection during discovery (true/false)
+enabled = true
+# Timeout for VLAN commands in seconds
+command_timeout = 30
+# Maximum retries for failed VLAN commands
+max_retries = 2
+# Include inactive VLANs in collection (true/false)
+include_inactive_vlans = true
+# Platforms to skip for VLAN collection (comma-separated)
+# platforms_to_skip = 
 """
         
         # Write configuration file
@@ -209,13 +231,35 @@ preferred_method = ssh
             config.logs_directory = self._config.get('output', 'logs_directory', fallback=config.logs_directory)
             config.excel_format = self._config.get('output', 'excel_format', fallback=config.excel_format)
             config.visio_enabled = self._config.getboolean('output', 'visio_enabled', fallback=config.visio_enabled)
-            config.site_boundary_pattern = self._config.get('output', 'site_boundary_pattern', fallback=config.site_boundary_pattern)
+            
+            # Handle site boundary pattern with proper blank detection and Unicode support
+            # Use has_option to distinguish between missing and blank values
+            raw_pattern = None
+            if self._config.has_option('output', 'site_boundary_pattern'):
+                # Option exists - get its value (could be blank)
+                raw_pattern = self._config.get('output', 'site_boundary_pattern')
+            # If option doesn't exist, raw_pattern remains None (missing)
+            
+            config.site_boundary_pattern = ConfigurationBlankHandler.process_site_boundary_pattern_with_unicode(
+                raw_pattern, 
+                default_pattern="*-CORE-*",
+                logger=self.logger
+            )
         
         # Apply CLI overrides
         if 'reports_dir' in self._cli_overrides:
             config.reports_directory = self._cli_overrides['reports_dir']
         if 'logs_dir' in self._cli_overrides:
             config.logs_directory = self._cli_overrides['logs_dir']
+        if 'site_boundary_pattern' in self._cli_overrides:
+            # CLI override for site boundary pattern - process through blank detection with Unicode support
+            cli_pattern = self._cli_overrides['site_boundary_pattern']
+            config.site_boundary_pattern = ConfigurationBlankHandler.process_site_boundary_pattern_with_unicode(
+                cli_pattern,
+                default_pattern="*-CORE-*",
+                logger=self.logger
+            )
+            self.logger.info(f"Site boundary pattern overridden by CLI: {cli_pattern} -> {config.site_boundary_pattern}")
             
         return config
     
@@ -227,5 +271,101 @@ preferred_method = ssh
             config.ssh_port = self._config.getint('connection', 'ssh_port', fallback=config.ssh_port)
             config.telnet_port = self._config.getint('connection', 'telnet_port', fallback=config.telnet_port)
             config.preferred_method = self._config.get('connection', 'preferred_method', fallback=config.preferred_method)
+            config.ssl_verify = self._config.getboolean('connection', 'ssl_verify', fallback=config.ssl_verify)
+            config.ssl_cert_file = self._config.get('connection', 'ssl_cert_file', fallback=config.ssl_cert_file)
+            config.ssl_key_file = self._config.get('connection', 'ssl_key_file', fallback=config.ssl_key_file)
+            config.ssl_ca_bundle = self._config.get('connection', 'ssl_ca_bundle', fallback=config.ssl_ca_bundle)
+            
+            # Convert empty strings to None for optional SSL file paths
+            if config.ssl_cert_file == '':
+                config.ssl_cert_file = None
+            if config.ssl_key_file == '':
+                config.ssl_key_file = None
+            if config.ssl_ca_bundle == '':
+                config.ssl_ca_bundle = None
             
         return config
+    
+    def _build_vlan_collection_config(self) -> VLANCollectionConfig:
+        """Build VLAN collection configuration with CLI overrides"""
+        config = VLANCollectionConfig()
+        
+        if self._config.has_section('vlan_collection'):
+            config.enabled = self._config.getboolean('vlan_collection', 'enabled', fallback=config.enabled)
+            config.command_timeout = self._config.getint('vlan_collection', 'command_timeout', fallback=config.command_timeout)
+            config.max_retries = self._config.getint('vlan_collection', 'max_retries', fallback=config.max_retries)
+            config.include_inactive_vlans = self._config.getboolean('vlan_collection', 'include_inactive_vlans', fallback=config.include_inactive_vlans)
+            
+            platforms_to_skip = self._config.get('vlan_collection', 'platforms_to_skip', fallback='')
+            if platforms_to_skip:
+                config.platforms_to_skip = [p.strip() for p in platforms_to_skip.split(',') if p.strip()]
+            else:
+                config.platforms_to_skip = []
+        
+        # Apply CLI overrides
+        if 'vlan_enabled' in self._cli_overrides:
+            config.enabled = self._cli_overrides['vlan_enabled']
+        if 'vlan_timeout' in self._cli_overrides:
+            config.command_timeout = self._cli_overrides['vlan_timeout']
+        if 'vlan_retries' in self._cli_overrides:
+            config.max_retries = self._cli_overrides['vlan_retries']
+        if 'vlan_include_inactive' in self._cli_overrides:
+            config.include_inactive_vlans = self._cli_overrides['vlan_include_inactive']
+            
+        return config
+    
+    def get_site_boundary_pattern(self) -> Optional[str]:
+        """
+        Get site boundary pattern with proper blank handling and CLI override support.
+        
+        This method provides direct access to the site boundary pattern
+        with proper blank value detection and handling. It distinguishes
+        between missing values (which get fallback) and explicitly blank
+        values (which disable the feature).
+        
+        Precedence order:
+        1. CLI overrides (highest priority)
+        2. Configuration file values
+        3. Default values (lowest priority)
+        
+        Returns:
+            Optional[str]: The site boundary pattern or None if disabled
+                - None: Site boundary detection is disabled (blank pattern)
+                - str: Site boundary detection is enabled with the pattern
+        """
+        # Check for CLI override first (highest precedence)
+        if 'site_boundary_pattern' in self._cli_overrides:
+            cli_pattern = self._cli_overrides['site_boundary_pattern']
+            processed_pattern = ConfigurationBlankHandler.process_site_boundary_pattern_with_unicode(
+                cli_pattern,
+                default_pattern="*-CORE-*",
+                logger=self.logger
+            )
+            self.logger.info(f"Using CLI override for site boundary pattern: {cli_pattern} -> {processed_pattern}")
+            return processed_pattern
+        
+        # Ensure configuration is loaded
+        if not self._config.sections():
+            self._config.read(self.config_file)
+        
+        # Load the raw value without any fallback to distinguish missing vs blank
+        raw_value = None
+        if self._config.has_section('output') and self._config.has_option('output', 'site_boundary_pattern'):
+            # Option exists - get its value (could be blank)
+            raw_value = self._config.get('output', 'site_boundary_pattern')
+        # If option doesn't exist, raw_value remains None (missing)
+        
+        # Process with blank detection and Unicode handling - this handles the distinction
+        processed_pattern = ConfigurationBlankHandler.process_site_boundary_pattern_with_unicode(
+            raw_value,
+            default_pattern="*-CORE-*",
+            logger=self.logger
+        )
+        
+        # Log the final decision for debugging
+        if processed_pattern is None:
+            self.logger.info("Site boundary detection is DISABLED due to blank pattern")
+        else:
+            self.logger.info(f"Site boundary detection is ENABLED with pattern: {processed_pattern}")
+        
+        return processed_pattern
