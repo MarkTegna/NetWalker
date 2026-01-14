@@ -21,12 +21,12 @@ class VLANParser:
         
         # Regex patterns for parsing VLAN information
         self.ios_vlan_pattern = re.compile(
-            r'^(\d+)\s+(\S+)\s+\S+\s+(.*)$', 
+            r'^(\d+)\s+(\S+)\s+\S+\s*(.*)$', 
             re.MULTILINE
         )
         
         self.nxos_vlan_pattern = re.compile(
-            r'^(\d+)\s+(\S+)\s+\S+\s+(.*)$', 
+            r'^(\d+)\s+(\S+)\s+\S+\s*(.*)$', 
             re.MULTILINE
         )
         
