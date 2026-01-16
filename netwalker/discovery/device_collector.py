@@ -357,9 +357,27 @@ class DeviceCollector:
             return "Unknown"
     
     def _extract_software_version(self, version_output: str) -> str:
-        """Extract software version from version output"""
+        """Extract software version from version output with platform-specific patterns"""
+        # Pattern 1: NX-OS specific (highest priority)
+        # Matches: "NXOS: version 9.3(9)"
+        nxos_match = re.search(r'NXOS:\s+version\s+([^\s,]+)', version_output, re.IGNORECASE)
+        if nxos_match:
+            return nxos_match.group(1).strip()
+        
+        # Pattern 2: System version (NX-OS fallback)
+        # Matches: "System version: 9.3(9)"
+        system_match = re.search(r'System version:\s+([^\s,]+)', version_output, re.IGNORECASE)
+        if system_match:
+            return system_match.group(1).strip()
+        
+        # Pattern 3: Generic version (IOS/IOS-XE)
+        # Matches: "Version 17.12.06"
+        # Note: This pattern can match license text, so check NX-OS patterns first
         version_match = self.version_pattern.search(version_output)
-        return version_match.group(1) if version_match else "Unknown"
+        if version_match:
+            return version_match.group(1).strip()
+        
+        return "Unknown"
     
     def _extract_serial_number(self, version_output: str) -> str:
         """Extract serial number from version output"""
@@ -367,23 +385,60 @@ class DeviceCollector:
         return serial_match.group(1) if serial_match else "Unknown"
     
     def _extract_hardware_model(self, version_output: str) -> str:
-        """Extract hardware model from version output"""
-        # Pattern 1: Model Number field (NX-OS and some IOS)
+        """Extract hardware model from version output with platform-specific patterns"""
+        # Pattern 1: Model Number field (all platforms, highest priority)
+        # Matches: "Model Number: C9396PX"
         model_match = self.model_pattern.search(version_output)
         if model_match:
             return model_match.group(1).strip()
         
-        # Pattern 2: Cisco model in platform line (IOS)
+        # Pattern 2: NX-OS Chassis (Nexus switches) - with Chassis keyword
+        # Matches: "cisco Nexus9000 C9396PX Chassis" or "cisco Nexus 56128P Chassis" or "cisco Nexus9000 C9336C-FX2 Chassis"
+        # Captures: "C9396PX" or "56128P" or "C9336C-FX2"
+        # Pattern handles both "cisco Nexus9000 MODEL Chassis" and "cisco Nexus MODEL Chassis"
+        nexus_match = re.search(r'cisco\s+Nexus\d*\s+([\w-]+)\s+Chassis', version_output, re.IGNORECASE)
+        if nexus_match:
+            return nexus_match.group(1).strip()
+        
+        # Pattern 2b: NX-OS without Chassis keyword (fallback for Nexus)
+        # Matches: "cisco Nexus9000 C9396PX" or "cisco Nexus 56128P"
+        # Captures: "C9396PX" or "56128P"
+        nexus_no_chassis = re.search(r'cisco\s+Nexus\d*\s+([\w-]+)', version_output, re.IGNORECASE)
+        if nexus_no_chassis:
+            model = nexus_no_chassis.group(1).strip()
+            # Make sure we didn't accidentally capture "Chassis" as part of the model
+            if not model.lower().endswith('chassis'):
+                return model
+        
+        # Pattern 3: Cisco model in processor line with parentheses (Catalyst 4500X, etc.)
+        # Matches: "cisco WS-C4500X-16 (MPC8572) processor"
+        # Captures: "WS-C4500X-16"
+        catalyst_processor_match = re.search(r'cisco\s+(WS-[\w-]+)\s+\([^)]+\)\s+processor', version_output, re.IGNORECASE)
+        if catalyst_processor_match:
+            return catalyst_processor_match.group(1).strip()
+        
+        # Pattern 4: Cisco model in processor line (ISR, ASR, etc.)
+        # Matches: "cisco ISR4451-X/K9 (OVLD-2RU) processor"
+        # Captures: "ISR4451-X/K9"
+        processor_match = re.search(r'cisco\s+([\w-]+/[\w-]+)\s+\([^)]+\)\s+processor', version_output, re.IGNORECASE)
+        if processor_match:
+            return processor_match.group(1).strip()
+        
+        # Pattern 5: Cisco model in platform line (IOS switches)
+        # Matches: "Cisco 2960 (revision 1.0)"
+        # Captures: "2960"
         cisco_model_match = re.search(r'Cisco\s+(\d+[A-Z]*)\s+\(', version_output, re.IGNORECASE)
         if cisco_model_match:
             return cisco_model_match.group(1).strip()
         
-        # Pattern 3: Model in hardware description line
+        # Pattern 6: Model in hardware description line (fallback)
+        # Matches: "cisco MODELNAME "
+        # Captures: "MODELNAME"
         hardware_model_match = re.search(r'cisco\s+([\w-]+)\s+', version_output, re.IGNORECASE)
         if hardware_model_match:
             model = hardware_model_match.group(1).strip()
             # Filter out common non-model words
-            if model.lower() not in ['systems', 'nexus', 'catalyst']:
+            if model.lower() not in ['systems', 'nexus', 'catalyst', 'ios']:
                 return model
         
         return "Unknown"

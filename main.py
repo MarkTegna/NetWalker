@@ -77,7 +77,8 @@ Version: {__version__}
     
     parser.add_argument(
         '--enable-password',
-        help='Device enable password (optional)'
+        action='store_true',
+        help='Prompt for enable password'
     )
     
     # Configuration options
@@ -142,6 +143,31 @@ Version: {__version__}
         version=f'NetWalker {__version__} by {__author__}'
     )
     
+    # Database options
+    parser.add_argument(
+        '--db-init',
+        action='store_true',
+        help='Initialize database schema (create tables)'
+    )
+    
+    parser.add_argument(
+        '--db-purge',
+        action='store_true',
+        help='Purge all data from database (requires confirmation)'
+    )
+    
+    parser.add_argument(
+        '--db-purge-devices',
+        action='store_true',
+        help='Delete devices marked with status=purge'
+    )
+    
+    parser.add_argument(
+        '--db-status',
+        action='store_true',
+        help='Show database connection status and record counts'
+    )
+    
     return parser.parse_args()
 
 
@@ -201,6 +227,68 @@ def main():
     try:
         # Parse command-line arguments
         args = parse_arguments()
+        
+        # Handle database commands (these don't require full app initialization)
+        if args.db_init or args.db_purge or args.db_purge_devices or args.db_status:
+            from netwalker.config.config_manager import ConfigurationManager
+            from netwalker.database import DatabaseManager
+            
+            # Load configuration
+            config_manager = ConfigurationManager(args.config)
+            parsed_config = config_manager.load_configuration()
+            
+            # Initialize database manager
+            db_config = parsed_config.get('database', {})
+            db_manager = DatabaseManager(db_config)
+            
+            if args.db_init:
+                print("Initializing database schema...")
+                if db_manager.initialize_database():
+                    print("[OK] Database initialized successfully")
+                    return 0
+                else:
+                    print("[FAIL] Database initialization failed")
+                    return 1
+            
+            elif args.db_purge:
+                print("WARNING: This will delete ALL data from the database!")
+                response = input("Type 'YES' to confirm: ")
+                if response == 'YES':
+                    print("Purging database...")
+                    if db_manager.purge_database():
+                        print("[OK] Database purged successfully")
+                        return 0
+                    else:
+                        print("[FAIL] Database purge failed")
+                        return 1
+                else:
+                    print("Purge cancelled")
+                    return 0
+            
+            elif args.db_purge_devices:
+                print("Purging devices marked for deletion...")
+                count = db_manager.purge_marked_devices()
+                if count >= 0:
+                    print(f"[OK] Purged {count} devices")
+                    return 0
+                else:
+                    print("[FAIL] Purge failed")
+                    return 1
+            
+            elif args.db_status:
+                print("Database Status:")
+                print("-" * 60)
+                status = db_manager.get_database_status()
+                print(f"Enabled: {status['enabled']}")
+                print(f"Connected: {status['connected']}")
+                if status['enabled']:
+                    print(f"Server: {status['server']}")
+                    print(f"Database: {status['database']}")
+                    if status['connected']:
+                        print("\nRecord Counts:")
+                        for table, count in status['record_counts'].items():
+                            print(f"  {table}: {count}")
+                return 0
         
         # Convert arguments to configuration overrides
         cli_config = convert_args_to_config(args)

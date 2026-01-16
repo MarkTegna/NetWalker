@@ -23,10 +23,50 @@ class CredentialManager:
     """Manages device credentials with encryption support and interactive prompting"""
     
     def __init__(self, credentials_file: str = "secret_creds.ini", cli_config: Optional[Dict[str, Any]] = None):
-        self.credentials_file = credentials_file
-        self.cli_config = cli_config or {}
         self.logger = logging.getLogger(__name__)
+        self.credentials_file = self._find_credentials_file(credentials_file)
+        self.cli_config = cli_config or {}
         self._credentials = {}
+    
+    def _find_credentials_file(self, filename: str) -> str:
+        """
+        Find credentials file in current directory or parent directory
+        
+        Search order:
+        1. Current directory
+        2. Parent directory (..\)
+        
+        Args:
+            filename: Name of credentials file to find
+            
+        Returns:
+            Path to credentials file (may not exist)
+        """
+        from pathlib import Path
+        
+        # Check current directory
+        current_path = Path(filename)
+        if current_path.exists():
+            logging.info(f"Found {filename} in current directory")
+            return str(current_path)
+        
+        # Check parent directory (..\)
+        parent_path = Path("..") / filename
+        if parent_path.exists():
+            abs_path = parent_path.absolute()
+            logging.info(f"Found {filename} in parent directory: {abs_path}")
+            return str(abs_path)
+        
+        # Check grandparent directory (..\..\)
+        grandparent_path = Path("..") / ".." / filename
+        if grandparent_path.exists():
+            abs_path = grandparent_path.absolute()
+            logging.info(f"Found {filename} in grandparent directory: {abs_path}")
+            return str(abs_path)
+        
+        # Return original filename (will be handled by exists check later)
+        logging.debug(f"{filename} not found in current, parent, or grandparent directory")
+        return filename
         
     def get_credentials(self) -> Optional[Credentials]:
         """
@@ -153,9 +193,14 @@ class CredentialManager:
                 print("Password cannot be empty")
                 return "", "", None
             
-            # Prompt for enable password (optional)
-            enable_prompt = input("Enable password (optional, press Enter to skip): ").strip()
-            enable_password = enable_prompt if enable_prompt else None
+            # Check if enable password prompt is enabled
+            prompt_enable = self.cli_config.get('enable_password', False)
+            
+            # Prompt for enable password only if enabled
+            enable_password = None
+            if prompt_enable:
+                enable_prompt = getpass.getpass("Enable password (optional, press Enter to skip): ")
+                enable_password = enable_prompt if enable_prompt else None
             
             print()
             print("Credentials entered successfully!")

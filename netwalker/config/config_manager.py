@@ -53,7 +53,8 @@ class ConfigurationManager:
             'exclusions': self._build_exclusion_config(),
             'output': self._build_output_config(),
             'connection': self._build_connection_config(),
-            'vlan_collection': self._build_vlan_collection_config()
+            'vlan_collection': self._build_vlan_collection_config(),
+            'database': self._build_database_config()
         }
         
         self.logger.info(f"Configuration loaded from {self.config_file}")
@@ -140,6 +141,26 @@ max_retries = 2
 include_inactive_vlans = true
 # Platforms to skip for VLAN collection (comma-separated)
 # platforms_to_skip = 
+
+[database]
+# Enable database inventory tracking (true/false)
+enabled = false
+# SQL Server hostname or IP address
+server = eit-prisqldb01.tgna.tegna.com
+# SQL Server port number
+port = 1433
+# Database name
+database = NetWalker
+# SQL Server username
+username = NetWalker
+# SQL Server password
+password = FluffyBunnyHitbyaBus
+# Trust server certificate for internal networks (true/false)
+trust_server_certificate = true
+# Connection timeout in seconds
+connection_timeout = 30
+# Command timeout in seconds
+command_timeout = 60
 """
         
         # Write configuration file
@@ -313,6 +334,80 @@ include_inactive_vlans = true
             config.include_inactive_vlans = self._cli_overrides['vlan_include_inactive']
             
         return config
+    
+    def _build_database_config(self) -> Dict[str, Any]:
+        """Build database configuration with password encryption support"""
+        config = {
+            'enabled': False,
+            'server': 'eit-prisqldb01.tgna.tegna.com',
+            'port': 1433,
+            'database': 'NetWalker',
+            'username': 'NetWalker',
+            'password': 'FluffyBunnyHitbyaBus',
+            'trust_server_certificate': True,
+            'connection_timeout': 30,
+            'command_timeout': 60
+        }
+        
+        if self._config.has_section('database'):
+            config['enabled'] = self._config.getboolean('database', 'enabled', fallback=config['enabled'])
+            config['server'] = self._config.get('database', 'server', fallback=config['server'])
+            config['port'] = self._config.getint('database', 'port', fallback=config['port'])
+            config['database'] = self._config.get('database', 'database', fallback=config['database'])
+            config['username'] = self._config.get('database', 'username', fallback=config['username'])
+            
+            # Get password and handle encryption
+            raw_password = self._config.get('database', 'password', fallback=config['password'])
+            
+            # Check if password needs encryption
+            if raw_password and not self._is_encrypted(raw_password):
+                self.logger.info("Database password is not encrypted - encrypting and updating config file")
+                encrypted_password = self._encrypt_password(raw_password)
+                
+                # Update config file with encrypted password
+                self._config.set('database', 'password', encrypted_password)
+                try:
+                    with open(self.config_file, 'w') as f:
+                        self._config.write(f)
+                    self.logger.info("Updated config file with encrypted database password")
+                except Exception as e:
+                    self.logger.warning(f"Could not update config file with encrypted password: {e}")
+                
+                config['password'] = raw_password  # Use decrypted password in config
+            elif raw_password and self._is_encrypted(raw_password):
+                # Decrypt password for use
+                config['password'] = self._decrypt_password(raw_password)
+            else:
+                config['password'] = raw_password
+            
+            config['trust_server_certificate'] = self._config.getboolean('database', 'trust_server_certificate', fallback=config['trust_server_certificate'])
+            config['connection_timeout'] = self._config.getint('database', 'connection_timeout', fallback=config['connection_timeout'])
+            config['command_timeout'] = self._config.getint('database', 'command_timeout', fallback=config['command_timeout'])
+        
+        return config
+    
+    def _is_encrypted(self, password: str) -> bool:
+        """Check if password is in encrypted format (ENC: prefix)"""
+        return password.startswith('ENC:') if password else False
+    
+    def _encrypt_password(self, password: str) -> str:
+        """Encrypt password using base64 encoding"""
+        import base64
+        encoded = base64.b64encode(password.encode('utf-8')).decode('utf-8')
+        return f"ENC:{encoded}"
+    
+    def _decrypt_password(self, encrypted_password: str) -> str:
+        """Decrypt password from base64 encoding"""
+        import base64
+        try:
+            if encrypted_password.startswith('ENC:'):
+                encoded = encrypted_password[4:]  # Remove 'ENC:' prefix
+                decoded = base64.b64decode(encoded).decode('utf-8')
+                return decoded
+            return encrypted_password
+        except Exception as e:
+            self.logger.error(f"Failed to decrypt password: {e}")
+            return encrypted_password
     
     def get_site_boundary_pattern(self) -> Optional[str]:
         """

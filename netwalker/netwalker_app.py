@@ -22,6 +22,7 @@ from .reports.excel_generator import ExcelReportGenerator
 from .output.output_manager import OutputManager
 from .logging_config import setup_logging
 from .validation.dns_validator import DNSValidator
+from .database.database_manager import DatabaseManager
 from .version import __version__, __author__, __compile_date__
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class NetWalkerApp:
         self.thread_manager: Optional[ThreadManager] = None
         self.excel_generator: Optional[ExcelReportGenerator] = None
         self.dns_validator: Optional[DNSValidator] = None
+        self.db_manager: Optional[DatabaseManager] = None
         
         # Application state
         self.initialized = False
@@ -104,24 +106,28 @@ class NetWalkerApp:
             logger.info("Step 6: Initializing filtering...")
             self._initialize_filtering()
             
+            # Initialize database (BEFORE discovery engine so it can be passed)
+            logger.info("Step 7: Initializing database...")
+            self._initialize_database()
+            
             # Initialize discovery engine
-            logger.info("Step 7: Initializing discovery engine...")
+            logger.info("Step 8: Initializing discovery engine...")
             self._initialize_discovery_engine()
             
             # Initialize threading
-            logger.info("Step 8: Initializing threading...")
+            logger.info("Step 9: Initializing threading...")
             self._initialize_threading()
             
             # Initialize reporting
-            logger.info("Step 9: Initializing reporting...")
+            logger.info("Step 10: Initializing reporting...")
             self._initialize_reporting()
             
             # Initialize DNS validation
-            logger.info("Step 10: Initializing DNS validation...")
+            logger.info("Step 11: Initializing DNS validation...")
             self._initialize_dns_validation()
             
             # Load seed devices
-            logger.info("Step 11: Loading seed devices...")
+            logger.info("Step 12: Loading seed devices...")
             self._load_seed_devices()
             
             self.initialized = True
@@ -245,7 +251,8 @@ class NetWalkerApp:
             self.connection_manager,
             self.filter_manager,
             self.config,
-            self.credentials
+            self.credentials,
+            self.db_manager
         )
         logger.info("Discovery engine initialized")
     
@@ -276,6 +283,35 @@ class NetWalkerApp:
         
         self.dns_validator = DNSValidator(dns_config)
         logger.info("DNS validation initialized")
+    
+    def _initialize_database(self):
+        """Initialize database management"""
+        # Get database configuration from parsed config
+        parsed_config = self.config_manager.load_configuration()
+        db_config = parsed_config.get('database', {})
+        
+        self.db_manager = DatabaseManager(db_config)
+        
+        if self.db_manager.enabled:
+            logger.info("Database management enabled - attempting connection...")
+            if self.db_manager.connect():
+                logger.info("Database connected successfully")
+                # Initialize database schema if needed
+                if self.db_manager.initialize_database():
+                    logger.info("Database schema initialized")
+                    # Verify connection is still open
+                    if self.db_manager.is_connected():
+                        logger.info("Database connection verified after schema initialization")
+                    else:
+                        logger.warning("Database connection lost after schema initialization - reconnecting...")
+                        if not self.db_manager.connect():
+                            logger.error("Failed to reconnect to database")
+                else:
+                    logger.warning("Database schema initialization failed")
+            else:
+                logger.warning("Database connection failed - continuing without database")
+        else:
+            logger.info("Database management disabled in configuration")
     
     def _load_seed_devices(self):
         """Load seed devices from configuration"""
@@ -504,6 +540,15 @@ class NetWalkerApp:
         """Cleanup application resources"""
         try:
             logger.info("Starting NetWalker application cleanup...")
+            
+            # Disconnect database first
+            if self.db_manager:
+                logger.info("Disconnecting database...")
+                try:
+                    self.db_manager.disconnect()
+                    logger.info("Database disconnected successfully")
+                except Exception as e:
+                    logger.warning(f"Error disconnecting database: {e}")
             
             # Close all active connections first
             if self.connection_manager:

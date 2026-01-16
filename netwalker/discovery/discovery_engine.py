@@ -155,7 +155,8 @@ class DiscoveryEngine:
     """
     
     def __init__(self, connection_manager: ConnectionManager, 
-                 filter_manager: FilterManager, config: Dict[str, Any], credentials):
+                 filter_manager: FilterManager, config: Dict[str, Any], credentials,
+                 db_manager=None):
         """
         Initialize DiscoveryEngine.
         
@@ -164,12 +165,14 @@ class DiscoveryEngine:
             filter_manager: Filter manager for boundary enforcement
             config: Configuration dictionary
             credentials: Device authentication credentials
+            db_manager: Optional database manager for inventory persistence
         """
         self.logger = logging.getLogger(__name__)
         self.connection_manager = connection_manager
         self.filter_manager = filter_manager
         self.config = config
         self.credentials = credentials
+        self.db_manager = db_manager
         
         # Discovery configuration
         self.max_depth = config.get('max_discovery_depth', 1)
@@ -492,6 +495,17 @@ class DiscoveryEngine:
                     "connected"
                 )
                 logger.info(f"  [INVENTORY] Added {device_key} to inventory as CONNECTED")
+                
+                # Process device discovery in database if enabled
+                if self.db_manager and self.db_manager.enabled:
+                    logger.info(f"  [DATABASE] Processing device {device_key} for database storage")
+                    try:
+                        if self.db_manager.process_device_discovery(discovery_result.device_info):
+                            logger.info(f"  [DATABASE] Successfully stored {device_key} in database")
+                        else:
+                            logger.warning(f"  [DATABASE] Failed to store {device_key} in database")
+                    except Exception as db_error:
+                        logger.error(f"  [DATABASE] Error storing {device_key}: {db_error}")
                 
                 # Process neighbors for further discovery
                 logger.info(f"  [PROCESSING NEIGHBORS] Evaluating neighbors of {device_key}")

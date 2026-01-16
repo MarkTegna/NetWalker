@@ -427,6 +427,18 @@ def main():
     print("-" * 50)
     
     try:
+        # Step 0: Clear Python cache to prevent packaging old bytecode
+        print("Clearing Python bytecode cache...")
+        cache_result = subprocess.run([
+            'powershell', '-ExecutionPolicy', 'Bypass', '-File', 'clear_python_cache.ps1'
+        ], capture_output=True, text=True)
+        
+        if cache_result.returncode == 0:
+            print("Cache cleared successfully")
+        else:
+            print(f"Warning: Cache clearing failed: {cache_result.stderr}")
+            print("Continuing with build...")
+        
         # Step 1: Increment version
         new_version = increment_version_for_build()
         

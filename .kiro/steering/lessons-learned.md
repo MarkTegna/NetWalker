@@ -34,3 +34,18 @@ Python bytecode cache issues:
 - Solution: Clear all __pycache__ directories and .pyc files using clear_python_cache.ps1
 - Prevention: Use `python -B` flag during development to prevent bytecode generation, or always run built executables for testing
 - If config changes don't take effect, always suspect cached bytecode first
+
+PyInstaller build cache issues:
+- CRITICAL: PyInstaller can package old cached .pyc files into the executable, causing regression issues
+- Symptoms: Source code is updated and correct, but built executable shows old behavior
+- Solution: ALWAYS run clear_python_cache.ps1 BEFORE running build_executable.py
+- Build process: 1) Clear cache, 2) Build executable, 3) Test
+- Never skip the cache clearing step when building executables after code changes
+- If a built executable doesn't reflect recent code changes, cached bytecode was likely packaged into the build
+
+Version management for builds:
+- Use AUTOMATIC builds (letter suffix) for development/troubleshooting: python increment_build.py --auto
+- Use USER builds (no letter) only when user explicitly says "build"
+- Automatic build sequence: 0.4.13 → 0.4.13a → 0.4.13b → 0.4.13c (for testing/development)
+- User build: 0.4.13c → 0.4.14 (when user says "build" for final testing)
+- Default behavior: Use automatic builds unless user explicitly requests "build"

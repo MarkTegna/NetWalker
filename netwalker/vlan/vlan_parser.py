@@ -153,6 +153,11 @@ class VLANParser:
         ---- -------------------------------- --------- -------------------------------
         1    default                          active    Eth1/1, Eth1/2, Po10
         10   VLAN0010                         active    Eth1/3, Eth1/4
+        
+        Note: NX-OS output has a second section with "VLAN Type" that should be ignored:
+        VLAN Type         Vlan-mode
+        ---- -----        ----------
+        1    enet         CE
         """
         vlans = []
         lines = output.split('\n')
@@ -160,9 +165,14 @@ class VLANParser:
         # Skip header lines and find data section
         data_started = False
         for line in lines:
-            line = line.strip()
-            if not line:
+            line_stripped = line.strip()
+            if not line_stripped:
                 continue
+            
+            # Stop parsing if we hit the "VLAN Type" section (NX-OS specific)
+            if 'VLAN Type' in line or ('Type' in line and 'Vlan-mode' in line):
+                self.logger.debug("Reached VLAN Type section, stopping VLAN name parsing")
+                break
             
             # Skip headers - look for the dashed line or "VLAN Name" header
             if 'VLAN Name' in line or '----' in line:
