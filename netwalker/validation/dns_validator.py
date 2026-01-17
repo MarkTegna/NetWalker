@@ -27,6 +27,7 @@ class DNSValidationResult:
     forward_dns_resolved_ip: Optional[str]
     reverse_dns_success: bool
     reverse_dns_resolved_hostname: Optional[str]
+    reverse_dns_hostname_mismatch: bool  # True if reverse DNS hostname doesn't match expected
     is_public_ip: bool
     ping_resolved_ip: Optional[str]
     ping_success: bool
@@ -95,6 +96,7 @@ class DNSValidator:
                 forward_dns_resolved_ip=None,
                 reverse_dns_success=False,
                 reverse_dns_resolved_hostname=None,
+                reverse_dns_hostname_mismatch=False,
                 is_public_ip=False,
                 ping_resolved_ip=None,
                 ping_success=False,
@@ -112,6 +114,17 @@ class DNSValidator:
             
             # Perform reverse DNS lookup
             result.reverse_dns_success, result.reverse_dns_resolved_hostname = self._reverse_dns_lookup(ip_address)
+            
+            # Validate reverse DNS hostname matches expected hostname
+            if result.reverse_dns_success and result.reverse_dns_resolved_hostname:
+                hostname_match = self._validate_hostname_match(hostname, result.reverse_dns_resolved_hostname)
+                if not hostname_match:
+                    result.reverse_dns_hostname_mismatch = True
+                    # Log mismatch but don't fail the validation
+                    logger.info(
+                        f"Reverse DNS hostname mismatch for {hostname}: "
+                        f"Expected '{hostname}', got '{result.reverse_dns_resolved_hostname}'"
+                    )
             
             # If public IP, try ping resolution
             if result.is_public_ip and self.enable_ping_resolution:
@@ -178,6 +191,7 @@ class DNSValidator:
                         forward_dns_resolved_ip=None,
                         reverse_dns_success=False,
                         reverse_dns_resolved_hostname=None,
+                        reverse_dns_hostname_mismatch=False,
                         is_public_ip=False,
                         ping_resolved_ip=None,
                         ping_success=False,
@@ -253,7 +267,7 @@ class DNSValidator:
     
     def _reverse_dns_lookup(self, ip_address: str) -> Tuple[bool, Optional[str]]:
         """
-        Perform reverse DNS lookup.
+        Perform reverse DNS lookup and validate hostname match.
         
         Args:
             ip_address: IP address to resolve
@@ -267,6 +281,32 @@ class DNSValidator:
         except (socket.gaierror, socket.herror, OSError) as e:
             logger.debug(f"Reverse DNS lookup failed for {ip_address}: {e}")
             return False, None
+    
+    def _validate_hostname_match(self, expected_hostname: str, dns_hostname: str) -> bool:
+        """
+        Validate that DNS hostname matches expected hostname.
+        Compares the hostname before the first dot.
+        
+        Args:
+            expected_hostname: Expected hostname from device
+            dns_hostname: Hostname returned from DNS
+            
+        Returns:
+            True if hostnames match, False otherwise
+        """
+        # Extract hostname before first dot
+        expected_short = expected_hostname.split('.')[0].lower()
+        dns_short = dns_hostname.split('.')[0].lower()
+        
+        match = expected_short == dns_short
+        
+        if not match:
+            logger.warning(
+                f"DNS hostname mismatch: Expected '{expected_hostname}' (short: '{expected_short}'), "
+                f"but DNS returned '{dns_hostname}' (short: '{dns_short}')"
+            )
+        
+        return match
     
     def _ping_resolve_hostname(self, hostname: str) -> Tuple[bool, Optional[str]]:
         """

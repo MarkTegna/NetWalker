@@ -453,6 +453,9 @@ class NetWalkerApp:
     def perform_dns_validation(self, inventory: Dict[str, Dict[str, Any]]) -> Optional[str]:
         """
         Perform DNS validation on discovered devices.
+        Uses same filtering logic as Device Inventory sheet - only validates devices
+        with complete data (status: connected, discovered, success).
+        Excludes skipped devices with incomplete/inaccurate information.
         
         Args:
             inventory: Device inventory dictionary
@@ -461,9 +464,24 @@ class NetWalkerApp:
             Path to DNS validation report, or None if validation failed
         """
         try:
-            # Extract device hostnames and IP addresses
+            # Filter devices using same logic as Device Inventory sheet
+            # Only include devices with valid statuses (complete information)
+            valid_statuses = ["connected", "discovered", "success"]
+            
+            # Extract device hostnames and IP addresses from filtered devices
             devices = []
+            skipped_count = 0
+            
             for device_key, device_info in inventory.items():
+                # Check if device has valid status (same logic as inventory sheet)
+                device_status = device_info.get('status', '').lower()
+                connection_status = device_info.get('connection_status', '').lower()
+                
+                # Skip devices that don't have valid status
+                if device_status not in valid_statuses and connection_status not in valid_statuses:
+                    skipped_count += 1
+                    continue
+                
                 # Use cleaned hostname for DNS validation (removes serial numbers in parentheses)
                 raw_hostname = device_info.get('hostname', '')
                 hostname = self.excel_generator._clean_hostname(raw_hostname)
@@ -476,7 +494,7 @@ class NetWalkerApp:
                 logger.warning("No devices found for DNS validation")
                 return None
             
-            logger.info(f"Starting DNS validation for {len(devices)} devices")
+            logger.info(f"Starting DNS validation for {len(devices)} devices ({skipped_count} skipped devices excluded)")
             
             # Perform concurrent DNS validation
             dns_results = self.dns_validator.validate_devices_concurrent(devices)
