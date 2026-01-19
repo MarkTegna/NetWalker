@@ -23,6 +23,14 @@ class PlatformHandler:
             'Unknown': ['show vlan brief', 'show vlan']  # Try both for unknown platforms
         }
         
+        # Platform-specific interface status command mapping
+        self.interface_status_commands = {
+            'IOS': ['show interfaces status'],
+            'IOS-XE': ['show interfaces status'],
+            'NX-OS': ['show interface status'],
+            'Unknown': ['show interfaces status', 'show interface status']
+        }
+        
         # Supported platforms for VLAN collection
         self.supported_platforms = ['IOS', 'IOS-XE', 'NX-OS']
         
@@ -155,3 +163,26 @@ class PlatformHandler:
         
         self.logger.debug(f"Command '{command}' support on {platform}: {is_supported}")
         return is_supported
+
+    
+    def get_interface_status_commands(self, platform: str) -> List[str]:
+        """
+        Get interface status commands for the specified platform
+        
+        Args:
+            platform: Device platform (IOS, IOS-XE, NX-OS, etc.)
+            
+        Returns:
+            List of interface status commands to try for the platform
+        """
+        if not platform:
+            platform = 'Unknown'
+            
+        # Normalize platform string
+        platform = platform.upper()
+        
+        # Get commands for platform, fallback to Unknown if not found
+        commands = self.interface_status_commands.get(platform, self.interface_status_commands['Unknown'])
+        
+        self.logger.debug(f"Selected interface status commands for platform {platform}: {commands}")
+        return commands.copy()  # Return a copy to prevent modification

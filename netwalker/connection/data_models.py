@@ -71,6 +71,7 @@ class VLANInfo:
     vlan_name: str
     port_count: int
     portchannel_count: int
+    connected_port_count: int  # Number of ports in "connected" status
     device_hostname: str
     device_ip: str
     collection_timestamp: Optional[datetime] = None

@@ -7,7 +7,7 @@ including port and PortChannel counts.
 
 import re
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from datetime import datetime
 
 from netwalker.connection.data_models import VLANInfo
@@ -132,6 +132,7 @@ class VLANParser:
                         vlan_name=vlan_name,
                         port_count=port_count,
                         portchannel_count=portchannel_count,
+                        connected_port_count=0,  # TODO: Implement interface status collection
                         device_hostname=device_hostname,
                         device_ip=device_ip,
                         collection_timestamp=datetime.now()
@@ -203,6 +204,7 @@ class VLANParser:
                         vlan_name=vlan_name,
                         port_count=port_count,
                         portchannel_count=portchannel_count,
+                        connected_port_count=0,  # TODO: Implement interface status collection
                         device_hostname=device_hostname,
                         device_ip=device_ip,
                         collection_timestamp=datetime.now()
@@ -436,3 +438,130 @@ class VLANParser:
             self.logger.info(f"Found {len(duplicates)} duplicate VLAN entries, including all in results")
         
         return vlans  # Return all VLANs including duplicates for manual review
+
+    
+    def parse_interface_status(self, output: str, platform: str) -> Dict[str, str]:
+        """
+        Parse interface status output to get port status
+        
+        Args:
+            output: Interface status command output
+            platform: Device platform
+            
+        Returns:
+            Dictionary mapping interface name to status (e.g., {'Gi1/0/1': 'connected'})
+        """
+        interface_status = {}
+        
+        try:
+            lines = output.split('\n')
+            
+            # Skip header lines
+            data_started = False
+            for line in lines:
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                
+                # Skip headers - look for "Port" or "Interface" header
+                if 'Port' in line or 'Interface' in line or '----' in line:
+                    data_started = True
+                    continue
+                
+                if not data_started:
+                    continue
+                
+                # Parse interface status line
+                # Format: Interface  Name  Status  VLAN  Duplex  Speed  Type
+                # Example: Twe4/1/1  TEST TO UCRYPT  connected  20  full  10G  SFP-10GBase-CX1
+                parts = line_stripped.split()
+                if len(parts) >= 3:
+                    interface_name = parts[0]
+                    # Status is typically the 3rd or 4th field depending on if there's a description
+                    # Look for "connected" keyword in the line
+                    if 'connected' in line.lower():
+                        interface_status[interface_name] = 'connected'
+                        self.logger.debug(f"Found connected interface: {interface_name}")
+            
+            self.logger.info(f"Parsed {len(interface_status)} connected interfaces from status output")
+            return interface_status
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing interface status: {e}")
+            return {}
+    
+    def count_connected_ports_in_vlan(self, vlan_ports_str: str, interface_status: Dict[str, str]) -> int:
+        """
+        Count how many ports in a VLAN are in connected status
+        
+        Args:
+            vlan_ports_str: String of ports in VLAN (e.g., "Gi1/0/1, Gi1/0/2, Po1")
+            interface_status: Dictionary of interface statuses
+            
+        Returns:
+            Count of connected ports
+        """
+        if not vlan_ports_str or not interface_status:
+            return 0
+        
+        try:
+            # Find all physical port interfaces in the VLAN
+            ports = self.port_pattern.findall(vlan_ports_str)
+            
+            # Count how many are connected
+            connected_count = 0
+            for port in ports:
+                # Normalize port name for matching (handle different formats)
+                normalized_port = self._normalize_interface_name(port)
+                
+                # Check if this port is in connected status
+                for interface_name, status in interface_status.items():
+                    normalized_interface = self._normalize_interface_name(interface_name)
+                    if normalized_interface == normalized_port and status == 'connected':
+                        connected_count += 1
+                        break
+            
+            self.logger.debug(f"Found {connected_count} connected ports out of {len(ports)} total ports in VLAN")
+            return connected_count
+            
+        except Exception as e:
+            self.logger.warning(f"Error counting connected ports: {e}")
+            return 0
+    
+    def _normalize_interface_name(self, interface_name: str) -> str:
+        """
+        Normalize interface name for matching
+        
+        Args:
+            interface_name: Interface name (e.g., "Gi1/0/1", "GigabitEthernet1/0/1", "Twe4/1/1")
+            
+        Returns:
+            Normalized interface name
+        """
+        # Convert to lowercase for case-insensitive matching
+        normalized = interface_name.lower().strip()
+        
+        # Expand common abbreviations to full names for matching
+        abbreviations = {
+            'gi': 'gigabitethernet',
+            'fa': 'fastethernet',
+            'te': 'tengigabitethernet',
+            'twe': 'twentyfivegige',
+            'fo': 'fortygigabitethernet',
+            'hu': 'hundredgige',
+            'eth': 'ethernet',
+            'se': 'serial',
+            'po': 'port-channel'
+        }
+        
+        # Try to match abbreviation at start of string
+        for abbr, full in abbreviations.items():
+            if normalized.startswith(abbr):
+                # Replace abbreviation with full name
+                normalized = full + normalized[len(abbr):]
+                break
+        
+        # Remove spaces and special characters for consistent matching
+        normalized = normalized.replace(' ', '').replace('_', '').replace('-', '')
+        
+        return normalized

@@ -153,13 +153,20 @@ class VLANCollector:
                 self._handle_collection_error(device_info, "No VLAN output received from device")
                 return []
             
-            # Parse VLAN information
+            # Collect interface status for connected port counting
+            interface_status = self._collect_interface_status(connection, device_info, collection_id)
+            
+            # Parse VLAN information with interface status
             vlans = self.vlan_parser.parse_vlan_output(
                 vlan_output, 
                 device_info.platform, 
                 device_info.hostname, 
                 device_info.primary_ip
             )
+            
+            # Update connected port counts if we have interface status
+            if interface_status:
+                vlans = self._update_connected_port_counts(vlans, vlan_output, interface_status, device_info.platform)
             
             # Validate and process VLANs
             valid_vlans = self._validate_and_process_vlans(vlans, device_info)
@@ -766,3 +773,102 @@ class VLANCollector:
         
         if summary['skipped_collections'] > summary['successful_collections'] and summary['total_attempts'] > 5:
             self.logger.warning("  High number of skipped collections - check platform support and configuration")
+
+    
+    def _collect_interface_status(self, connection: Any, device_info: DeviceInfo, collection_id: str) -> Dict[str, str]:
+        """
+        Collect interface status information from device
+        
+        Args:
+            connection: Active device connection
+            device_info: Device information
+            collection_id: Unique collection identifier
+            
+        Returns:
+            Dictionary mapping interface name to status
+        """
+        try:
+            self.logger.debug(f"Collecting interface status for {device_info.hostname}")
+            
+            # Get platform-specific interface status commands
+            commands = self.platform_handler.get_interface_status_commands(device_info.platform)
+            
+            # Execute interface status command
+            for command in commands:
+                try:
+                    self.logger.debug(f"Executing interface status command '{command}' on {device_info.hostname}")
+                    
+                    output = self._execute_single_command_with_timeout(connection, command, collection_id)
+                    
+                    if output and output.strip():
+                        # Parse interface status
+                        interface_status = self.vlan_parser.parse_interface_status(output, device_info.platform)
+                        
+                        if interface_status:
+                            self.logger.info(f"Successfully collected status for {len(interface_status)} connected interfaces on {device_info.hostname}")
+                            return interface_status
+                        else:
+                            self.logger.warning(f"No interface status data parsed from command '{command}' on {device_info.hostname}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Interface status command '{command}' failed on {device_info.hostname}: {e}")
+                    continue
+            
+            self.logger.warning(f"All interface status commands failed for {device_info.hostname}")
+            return {}
+            
+        except Exception as e:
+            self.logger.error(f"Error collecting interface status for {device_info.hostname}: {e}")
+            return {}
+    
+    def _update_connected_port_counts(self, vlans: List[VLANInfo], vlan_output: str, 
+                                     interface_status: Dict[str, str], platform: str) -> List[VLANInfo]:
+        """
+        Update connected port counts for VLANs based on interface status
+        
+        Args:
+            vlans: List of VLANInfo objects
+            vlan_output: Original VLAN command output
+            interface_status: Dictionary of interface statuses
+            platform: Device platform
+            
+        Returns:
+            Updated list of VLANInfo objects with connected port counts
+        """
+        try:
+            self.logger.debug(f"Updating connected port counts for {len(vlans)} VLANs")
+            
+            # Parse VLAN output again to get port assignments
+            lines = vlan_output.split('\n')
+            vlan_ports_map = {}
+            
+            # Build map of VLAN ID to ports string
+            for line in lines:
+                line_stripped = line.strip()
+                if not line_stripped or 'VLAN' in line or '----' in line:
+                    continue
+                
+                # Try to extract VLAN ID and ports from line
+                parts = line_stripped.split()
+                if len(parts) >= 3:
+                    try:
+                        vlan_id = int(parts[0])
+                        # Ports are typically in the 3rd+ columns
+                        ports_str = ' '.join(parts[2:])
+                        vlan_ports_map[vlan_id] = ports_str
+                    except (ValueError, IndexError):
+                        continue
+            
+            # Update connected port counts for each VLAN
+            for vlan in vlans:
+                if vlan.vlan_id in vlan_ports_map:
+                    ports_str = vlan_ports_map[vlan.vlan_id]
+                    connected_count = self.vlan_parser.count_connected_ports_in_vlan(ports_str, interface_status)
+                    vlan.connected_port_count = connected_count
+                    self.logger.debug(f"VLAN {vlan.vlan_id}: {connected_count} connected ports out of {vlan.port_count} total")
+            
+            return vlans
+            
+        except Exception as e:
+            self.logger.error(f"Error updating connected port counts: {e}")
+            return vlans
