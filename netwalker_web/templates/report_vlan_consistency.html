@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}VLAN Consistency - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / 
+    <a href="{{ url_for('reports') }}">Reports</a> / 
+    VLAN Consistency
+</div>
+
+<a href="{{ url_for('reports') }}" class="back-link">← Back to Reports</a>
+
+<div class="card">
+    <h2>VLAN Consistency Report</h2>
+    <p style="margin-bottom: 1rem; color: #7f8c8d;">VLANs with inconsistent names across devices</p>
+    
+    {% if vlans %}
+    <table>
+        <thead>
+            <tr>
+                <th>VLAN Number</th>
+                <th>Name Count</th>
+                <th>Device Count</th>
+                <th>Names</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for vlan in vlans %}
+            <tr>
+                <td><strong>{{ vlan[0] }}</strong></td>
+                <td><span class="badge badge-warning">{{ vlan[1] }} names</span></td>
+                <td>{{ vlan[3] }} devices</td>
+                <td>{{ vlan[2] }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">{{ vlans|length }} VLAN(s) with inconsistent names found</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No VLAN inconsistencies found - all VLANs have consistent names</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

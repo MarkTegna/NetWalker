@@ -14,60 +14,92 @@ def create_parser():
         epilog=f"Author: {__author__} | Version: {__version__}"
     )
     
+    # Create subparsers for different commands
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Discovery command (default)
+    discovery_parser = subparsers.add_parser('discover', help='Run network discovery')
+    
     # Configuration options
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--config", "-c",
         default="netwalker.ini",
         help="Configuration file path (default: netwalker.ini)"
     )
     
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--seeds", "-s",
         default="seed_device.ini",
         help="Seed devices file path (default: seed_device.ini)"
     )
     
     # Discovery options
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--max-depth", "-d",
         type=int,
         help="Maximum discovery depth (overrides config file)"
     )
     
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--concurrent-connections", "-j",
         type=int,
         help="Number of concurrent connections (overrides config file)"
     )
     
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--timeout", "-t",
         type=int,
         help="Connection timeout in seconds (overrides config file)"
     )
     
     # Output options
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--reports-dir", "-r",
         help="Reports output directory (overrides config file)"
     )
     
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--logs-dir", "-l",
         help="Logs output directory (overrides config file)"
     )
     
     # Verbosity
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging"
     )
     
-    parser.add_argument(
+    discovery_parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Suppress console output (log file only)"
+    )
+    
+    # Visio generator command
+    visio_parser = subparsers.add_parser('visio', help='Generate Visio topology diagrams from database')
+    
+    visio_parser.add_argument(
+        '--config',
+        default='netwalker.ini',
+        help='Configuration file path (default: netwalker.ini)'
+    )
+    
+    visio_parser.add_argument(
+        '--output',
+        default='./visio_diagrams',
+        help='Output directory for Visio files (default: ./visio_diagrams)'
+    )
+    
+    visio_parser.add_argument(
+        '--site',
+        help='Generate diagram for specific site only (e.g., BORO)'
+    )
+    
+    visio_parser.add_argument(
+        '--all-in-one',
+        action='store_true',
+        help='Generate single diagram with all devices instead of per-site diagrams'
     )
     
     # Version

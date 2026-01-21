@@ -4,7 +4,7 @@
 
 The NetWalker Tool is a modular Python application designed for automated Cisco network topology discovery and documentation. The system employs a breadth-first discovery algorithm to systematically explore network infrastructure using CDP and LLDP protocols, generating comprehensive reports in Excel and Microsoft Visio formats.
 
-The architecture follows a modular design with clear separation of concerns, enabling concurrent processing, flexible configuration management, and robust error handling. The system is specifically designed for Windows environments and leverages industry-standard libraries including scrapli for network connectivity and pywin32 for Microsoft Office integration.
+The architecture follows a modular design with clear separation of concerns, enabling concurrent processing, flexible configuration management, and robust error handling. The system is specifically designed for Windows environments and leverages industry-standard libraries including scrapli for network connectivity and vsdx for Visio diagram generation.
 
 ## Architecture
 
@@ -37,13 +37,13 @@ graph TB
     
     subgraph "External Dependencies"
         SCRAPLI[scrapli Library]
-        PYWIN32[pywin32 COM]
+        VSDX[vsdx Library]
         OPENPYXL[openpyxl]
     end
     
     SSH --> SCRAPLI
     TEL --> SCRAPLI
-    VG --> PYWIN32
+    VG --> VSDX
     EG --> OPENPYXL
 ```
 
@@ -218,11 +218,13 @@ class DeviceInfo:
 - Timestamp-based file naming convention
 
 **Visio Generation**:
-- Uses pywin32 COM interface exclusively
+- Uses vsdx Python library for programmatic .vsdx file creation
+- Does not require Microsoft Visio to be installed
 - Creates network topology diagrams from scratch
-- Represents devices as shapes with connection lines
-- Includes device information in shape properties
-- Proper COM resource cleanup after operations
+- Represents devices as shapes with hierarchical layout (core, distribution, access)
+- Color-codes devices by type for visual clarity
+- Includes connection lines with port labels
+- Adds title, legend, and timestamp information
 
 ## Data Models
 
@@ -374,17 +376,21 @@ After analyzing the acceptance criteria, I've identified the following testable 
 
 ### Visio Integration Properties
 
-**Property 19: COM Interface Exclusivity**
-*For any* Visio operation, only the pywin32 COM interface should be used without any external library dependencies
-**Validates: Requirements 6.1**
+**Property 19: vsdx Library Usage**
+*For any* Visio operation, the vsdx Python library should be used to generate .vsdx files programmatically without requiring Microsoft Visio installation
+**Validates: Requirements 6.1, 6.2**
 
-**Property 20: Visio Installation Validation**
-*For any* Visio output request when Microsoft Visio is not installed, the system should fail cleanly with appropriate error messaging
-**Validates: Requirements 6.2**
+**Property 20: Hierarchical Device Layout**
+*For any* network topology diagram, devices should be organized hierarchically with core devices at top, distribution in middle, and access devices at bottom
+**Validates: Requirements 6.5**
 
-**Property 21: COM Resource Cleanup**
-*For any* Visio operation sequence, all COM resources should be properly released and cleaned up after completion
-**Validates: Requirements 6.4**
+**Property 21: Device Type Color Coding**
+*For any* device in a Visio diagram, the shape color should correspond to the device type (core, distribution, access) for visual distinction
+**Validates: Requirements 6.6**
+
+**Property 22: Connection Label Completeness**
+*For any* connection line in a Visio diagram, port information from both source and destination devices should be included in the connection label
+**Validates: Requirements 6.7**
 
 ### Configuration Management Properties
 
@@ -478,7 +484,7 @@ The system implements comprehensive error handling across all components to ensu
 
 ### Output Generation Error Handling
 - **Excel Generation Failures**: Detailed error reporting with partial output preservation
-- **Visio COM Errors**: Proper COM resource cleanup even on failure
+- **Visio Generation Errors**: Graceful handling of vsdx library errors with detailed logging
 - **File System Errors**: Automatic directory creation and permission handling
 - **Disk Space Issues**: Graceful handling of insufficient disk space
 
@@ -537,7 +543,7 @@ def test_breadth_first_traversal_order(network_topology):
 - Maintain a test lab environment with actual Cisco devices for comprehensive validation
 - Fall back to mock objects only when real devices are unavailable
 - File system operations tested against actual file system for realistic behavior
-- COM interface tested with actual Visio installation when available
+- Visio generation tested with actual .vsdx file creation and validation
 
 ### Test Data Generation
 

@@ -68,6 +68,9 @@ datas = [
     ('netwalker.ini', '.'),
     ('seed_file.csv', '.'),
     
+    # Include Visio template
+    ('TEGNA-NETWORK-Template.vsdx', '.'),
+    
     # Include any additional data files
     ('netwalker', 'netwalker'),
 ]
@@ -141,6 +144,20 @@ hiddenimports = [
     'asyncssh.client',
     'asyncssh.auth',
     'asyncssh.crypto',
+    
+    # Visio generation dependencies
+    'vsdx',
+    'vsdx.vsdxfile',
+    'lxml',
+    'lxml.etree',
+    'lxml._elementpath',
+    'pyodbc',
+    
+    # COM automation for Visio
+    'win32com',
+    'win32com.client',
+    'pythoncom',
+    'pywintypes',
     
     # Other dependencies
     'openpyxl',
@@ -328,12 +345,17 @@ def create_distribution_package(version):
     supporting_files = [
         'netwalker.ini',
         'seed_file.csv',
-        'README.md'
+        'README.md',
+        'netwalker_visio.py',
+        'TEGNA-NETWORK-Template.vsdx',
+        'VISIO_GENERATOR_README.md'
     ]
     
     for file_name in supporting_files:
         if Path(file_name).exists():
             shutil.copy2(file_name, package_path)
+        else:
+            print(f"Warning: {file_name} not found, skipping...")
     
     # Create README for distribution if it doesn't exist
     readme_path = package_path / 'README.md'

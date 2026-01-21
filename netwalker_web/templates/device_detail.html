@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}{{ device[1] }} - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / 
+    <a href="{{ url_for('devices') }}">Devices</a> / 
+    {{ device[1] }}
+</div>
+
+<a href="javascript:goBack()" class="back-link">← Back to Devices</a>
+
+<div class="card">
+    <h2>Device Information</h2>
+    <div class="detail-grid">
+        <div class="detail-label">Device Name:</div>
+        <div class="detail-value"><strong>{{ device[1] }}</strong></div>
+        
+        <div class="detail-label">Serial Number:</div>
+        <div class="detail-value">{{ device[2] }}</div>
+        
+        <div class="detail-label">Platform:</div>
+        <div class="detail-value"><span class="badge badge-info">{{ device[3] or 'Unknown' }}</span></div>
+        
+        <div class="detail-label">Hardware Model:</div>
+        <div class="detail-value">{{ device[4] or 'N/A' }}</div>
+        
+        <div class="detail-label">First Seen:</div>
+        <div class="detail-value">{{ device[5]|datetime_format }}</div>
+        
+        <div class="detail-label">Last Seen:</div>
+        <div class="detail-value">{{ device[6]|datetime_format }}</div>
+        
+        <div class="detail-label">Status:</div>
+        <div class="detail-value">
+            {% if device[7] == 'active' %}
+            <span class="badge badge-success">Active</span>
+            {% else %}
+            <span class="badge badge-warning">{{ device[7] }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Software Versions</h2>
+    {% if versions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Version</th>
+                <th>First Seen</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for version in versions %}
+            <tr>
+                <td><strong>{{ version[0] }}</strong></td>
+                <td>{{ version[1]|datetime_format }}</td>
+                <td>{{ version[2]|datetime_format }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No version information available</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Interfaces ({{ interfaces|length }})</h2>
+    {% if interfaces %}
+    <table>
+        <thead>
+            <tr>
+                <th>Interface Name</th>
+                <th>IP Address</th>
+                <th>Subnet Mask</th>
+                <th>Type</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for interface in interfaces %}
+            <tr>
+                <td><strong>{{ interface[0] }}</strong></td>
+                <td>{{ interface[1] }}</td>
+                <td>{{ interface[2] or 'N/A' }}</td>
+                <td><span class="badge badge-info">{{ interface[3] or 'Unknown' }}</span></td>
+                <td>{{ interface[4]|datetime_format }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No interfaces found</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>VLANs ({{ vlans|length }})</h2>
+    {% if vlans %}
+    <table>
+        <thead>
+            <tr>
+                <th>VLAN Number</th>
+                <th>VLAN Name</th>
+                <th>Port Count</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for vlan in vlans %}
+            <tr>
+                <td><strong>{{ vlan[0] }}</strong></td>
+                <td>{{ vlan[1] }}</td>
+                <td>{{ vlan[2] or 0 }}</td>
+                <td>{{ vlan[3]|datetime_format }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No VLANs found</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

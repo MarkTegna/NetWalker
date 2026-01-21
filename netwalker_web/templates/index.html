@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - NetWalker{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 2rem;">Dashboard</h1>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <h3>Active Devices</h3>
+        <div class="value">{{ device_count }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Total VLANs</h3>
+        <div class="value">{{ vlan_count }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Interfaces</h3>
+        <div class="value">{{ interface_count }}</div>
+    </div>
+    <div class="stat-card">
+        <h3>Platforms</h3>
+        <div class="value">{{ platform_count }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Recently Updated Devices</h2>
+    {% if recent_devices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Platform</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for device in recent_devices %}
+            <tr>
+                <td>{{ device[0] }}</td>
+                <td><span class="badge badge-info">{{ device[1] or 'Unknown' }}</span></td>
+                <td>{{ device[2]|datetime_format }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No devices found</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Quick Links</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-top: 1rem;">
+        <a href="{{ url_for('devices') }}" class="btn">View All Devices</a>
+        <a href="{{ url_for('vlans') }}" class="btn">View All VLANs</a>
+        <a href="{{ url_for('interfaces') }}" class="btn">View All Interfaces</a>
+        <a href="{{ url_for('reports') }}" class="btn">View Reports</a>
+    </div>
+</div>
+{% endblock %}

@@ -7,7 +7,7 @@ schema creation, and CRUD operations.
 
 import logging
 import pyodbc
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from .models import Device, DeviceVersion, DeviceInterface, VLAN, DeviceVLAN
 
@@ -333,6 +333,37 @@ class DatabaseManager:
                 END
             """)
             
+            # Create device_neighbors table
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_neighbors')
+                BEGIN
+                    CREATE TABLE device_neighbors (
+                        neighbor_id INT IDENTITY(1,1) PRIMARY KEY,
+                        source_device_id INT NOT NULL,
+                        source_interface NVARCHAR(100) NOT NULL,
+                        destination_device_id INT NOT NULL,
+                        destination_interface NVARCHAR(100) NOT NULL,
+                        protocol NVARCHAR(10) NOT NULL,
+                        first_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        last_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        CONSTRAINT FK_neighbor_source FOREIGN KEY (source_device_id) 
+                            REFERENCES devices(device_id) ON DELETE CASCADE,
+                        CONSTRAINT FK_neighbor_destination FOREIGN KEY (destination_device_id) 
+                            REFERENCES devices(device_id) ON DELETE NO ACTION,
+                        CONSTRAINT UQ_neighbor_connection UNIQUE (
+                            source_device_id, source_interface, 
+                            destination_device_id, destination_interface
+                        )
+                    );
+                    CREATE INDEX IX_neighbors_source ON device_neighbors(source_device_id);
+                    CREATE INDEX IX_neighbors_destination ON device_neighbors(destination_device_id);
+                    CREATE INDEX IX_neighbors_last_seen ON device_neighbors(last_seen);
+                    CREATE INDEX IX_neighbors_protocol ON device_neighbors(protocol);
+                END
+            """)
+            
             self.connection.commit()
             self.logger.info("Database schema initialized successfully")
             return True
@@ -369,6 +400,8 @@ class DatabaseManager:
             cursor = self.connection.cursor()
             
             # Delete in order to respect foreign key constraints
+            # Delete neighbors first (references devices)
+            cursor.execute("DELETE FROM device_neighbors")
             cursor.execute("DELETE FROM device_vlans")
             cursor.execute("DELETE FROM device_interfaces")
             cursor.execute("DELETE FROM device_versions")
@@ -817,8 +850,493 @@ class DatabaseManager:
                 if vlan_number and vlan_name:
                     self.upsert_device_vlan(device_id, vlan_number, vlan_name, port_count)
             
+            # Upsert neighbors (if available)
+            neighbors = device_info.get('neighbors', [])
+            if neighbors:
+                try:
+                    neighbor_count = self.upsert_device_neighbors(device_id, neighbors)
+                    if neighbor_count > 0:
+                        self.logger.info(f"Stored {neighbor_count} neighbors for device {device_id}")
+                except Exception as e:
+                    # Log error but continue - don't fail entire discovery
+                    self.logger.error(f"Error storing neighbors for device {device_id}: {e}")
+            
             return True
             
         except Exception as e:
             self.logger.error(f"Error processing device discovery: {e}")
             return False
+    
+    def resolve_hostname_to_device_id(self, hostname: str) -> Optional[int]:
+        """
+        Resolve neighbor hostname to device_id
+        
+        Args:
+            hostname: Device hostname (may be FQDN)
+            
+        Returns:
+            device_id if found, None otherwise
+        """
+        if not self.enabled or not self.is_connected():
+            return None
+        
+        if not hostname:
+            return None
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # Strip domain suffix from FQDN (e.g., "router.example.com" → "router")
+            short_hostname = hostname.split('.')[0] if '.' in hostname else hostname
+            
+            # Query devices table by device_name
+            # If multiple matches, return device with most recent last_seen
+            cursor.execute("""
+                SELECT TOP 1 device_id 
+                FROM devices 
+                WHERE device_name = ? 
+                ORDER BY last_seen DESC
+            """, (short_hostname,))
+            
+            row = cursor.fetchone()
+            cursor.close()
+            
+            if row:
+                device_id = row[0]
+                self.logger.debug(f"Resolved hostname '{hostname}' to device_id {device_id}")
+                return device_id
+            else:
+                self.logger.debug(f"Could not resolve hostname '{hostname}' to device_id")
+                return None
+                
+        except pyodbc.Error as e:
+            self.logger.error(f"Error resolving hostname '{hostname}': {e}")
+            return None
+    
+    def check_reverse_connection(self, source_id: int, source_if: str, 
+                                 dest_id: int, dest_if: str) -> Optional[int]:
+        """
+        Check if reverse connection exists (dest→source)
+        
+        Args:
+            source_id: Source device ID
+            source_if: Source interface name
+            dest_id: Destination device ID
+            dest_if: Destination interface name
+            
+        Returns:
+            neighbor_id if reverse exists, None otherwise
+        """
+        if not self.enabled or not self.is_connected():
+            return None
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # Check for reverse connection (dest→source with swapped interfaces)
+            cursor.execute("""
+                SELECT neighbor_id 
+                FROM device_neighbors 
+                WHERE source_device_id = ? 
+                  AND source_interface = ? 
+                  AND destination_device_id = ? 
+                  AND destination_interface = ?
+            """, (dest_id, dest_if, source_id, source_if))
+            
+            row = cursor.fetchone()
+            cursor.close()
+            
+            if row:
+                neighbor_id = row[0]
+                self.logger.debug(f"Found reverse connection: neighbor_id {neighbor_id}")
+                return neighbor_id
+            else:
+                return None
+                
+        except pyodbc.Error as e:
+            self.logger.error(f"Error checking reverse connection: {e}")
+            return None
+    
+    def get_consistent_direction(self, source_id: int, source_if: str,
+                                 dest_id: int, dest_if: str) -> Tuple[int, str, int, str]:
+        """
+        Return connection with consistent direction (lower device_id as source)
+        
+        Args:
+            source_id: Source device ID
+            source_if: Source interface name
+            dest_id: Destination device ID
+            dest_if: Destination interface name
+            
+        Returns:
+            Tuple of (source_id, source_if, dest_id, dest_if) in consistent direction
+        """
+        if source_id <= dest_id:
+            # Already in correct direction
+            return (source_id, source_if, dest_id, dest_if)
+        else:
+            # Swap to put lower device_id as source
+            return (dest_id, dest_if, source_id, source_if)
+    
+    def upsert_neighbor_connection(self, source_id: int, source_if: str,
+                                   dest_id: int, dest_if: str, protocol: str) -> bool:
+        """
+        Insert or update a neighbor connection
+        
+        Args:
+            source_id: Source device ID
+            source_if: Source interface name
+            dest_id: Destination device ID
+            dest_if: Destination interface name
+            protocol: Protocol used (CDP or LLDP)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.enabled or not self.is_connected():
+            return False
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # Check if connection exists (exact match)
+            cursor.execute("""
+                SELECT neighbor_id FROM device_neighbors 
+                WHERE source_device_id = ? 
+                  AND source_interface = ? 
+                  AND destination_device_id = ? 
+                  AND destination_interface = ?
+            """, (source_id, source_if, dest_id, dest_if))
+            
+            row = cursor.fetchone()
+            
+            if row:
+                # Update existing connection
+                neighbor_id = row[0]
+                cursor.execute("""
+                    UPDATE device_neighbors 
+                    SET last_seen = GETDATE(),
+                        protocol = ?,
+                        updated_at = GETDATE()
+                    WHERE neighbor_id = ?
+                """, (protocol, neighbor_id))
+                
+                self.logger.debug(f"Updated neighbor connection: {neighbor_id}")
+            else:
+                # Insert new connection
+                cursor.execute("""
+                    INSERT INTO device_neighbors 
+                    (source_device_id, source_interface, destination_device_id, 
+                     destination_interface, protocol)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (source_id, source_if, dest_id, dest_if, protocol))
+                
+                self.logger.debug(f"Created new neighbor connection: {source_id} -> {dest_id}")
+            
+            self.connection.commit()
+            cursor.close()
+            return True
+            
+        except pyodbc.Error as e:
+            self.logger.error(f"Error upserting neighbor connection: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+    
+    def upsert_device_neighbors(self, device_id: int, neighbors: List[Any]) -> int:
+        """
+        Store or update neighbor connections for a device
+        
+        Args:
+            device_id: Source device ID
+            neighbors: List of NeighborInfo objects
+            
+        Returns:
+            Count of neighbors successfully stored
+        """
+        if not self.enabled or not self.is_connected():
+            return 0
+        
+        if not neighbors:
+            return 0
+        
+        stored_count = 0
+        
+        for neighbor in neighbors:
+            try:
+                # Extract neighbor hostname
+                neighbor_hostname = neighbor.device_id if hasattr(neighbor, 'device_id') else str(neighbor)
+                
+                # Resolve hostname to destination_device_id
+                dest_device_id = self.resolve_hostname_to_device_id(neighbor_hostname)
+                
+                if not dest_device_id:
+                    # Skip if resolution fails
+                    self.logger.warning(f"Could not resolve neighbor hostname: {neighbor_hostname}")
+                    continue
+                
+                # Get interface names
+                local_interface = neighbor.local_interface if hasattr(neighbor, 'local_interface') else 'Unknown'
+                remote_interface = neighbor.remote_interface if hasattr(neighbor, 'remote_interface') else 'Unknown'
+                protocol = neighbor.protocol if hasattr(neighbor, 'protocol') else 'CDP'
+                
+                # Normalize interface names (import ProtocolParser if needed)
+                from netwalker.discovery.protocol_parser import ProtocolParser
+                parser = ProtocolParser()
+                local_interface = parser.normalize_interface_name(local_interface)
+                remote_interface = parser.normalize_interface_name(remote_interface)
+                
+                # Check for reverse connection
+                reverse_id = self.check_reverse_connection(
+                    device_id, local_interface, 
+                    dest_device_id, remote_interface
+                )
+                
+                if reverse_id:
+                    # Reverse connection exists, update it
+                    cursor = self.connection.cursor()
+                    cursor.execute("""
+                        UPDATE device_neighbors 
+                        SET last_seen = GETDATE(),
+                            protocol = ?,
+                            updated_at = GETDATE()
+                        WHERE neighbor_id = ?
+                    """, (protocol, reverse_id))
+                    self.connection.commit()
+                    cursor.close()
+                    
+                    self.logger.debug(f"Updated reverse connection: {reverse_id}")
+                    stored_count += 1
+                else:
+                    # No reverse connection, insert with consistent direction
+                    src_id, src_if, dst_id, dst_if = self.get_consistent_direction(
+                        device_id, local_interface,
+                        dest_device_id, remote_interface
+                    )
+                    
+                    if self.upsert_neighbor_connection(src_id, src_if, dst_id, dst_if, protocol):
+                        stored_count += 1
+                
+            except Exception as e:
+                # Continue processing remaining neighbors on individual failures
+                self.logger.error(f"Error storing neighbor {neighbor}: {e}")
+                continue
+        
+        if stored_count > 0:
+            self.logger.info(f"Stored {stored_count} neighbor connections for device {device_id}")
+        
+        return stored_count
+
+    def get_device_neighbors(self, device_id: int) -> List[Dict[str, Any]]:
+        """
+        Retrieve all neighbors for a device (both directions)
+        
+        Args:
+            device_id: Device ID to query neighbors for
+            
+        Returns:
+            List of neighbor connection dictionaries
+        """
+        if not self.enabled or not self.is_connected():
+            return []
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # Query device_neighbors where device is source OR destination
+            cursor.execute("""
+                SELECT 
+                    n.neighbor_id,
+                    n.source_device_id,
+                    d1.device_name AS source_name,
+                    n.source_interface,
+                    n.destination_device_id,
+                    d2.device_name AS dest_name,
+                    n.destination_interface,
+                    n.protocol,
+                    n.first_seen,
+                    n.last_seen
+                FROM device_neighbors n
+                INNER JOIN devices d1 ON n.source_device_id = d1.device_id
+                INNER JOIN devices d2 ON n.destination_device_id = d2.device_id
+                WHERE n.source_device_id = ? OR n.destination_device_id = ?
+                ORDER BY n.last_seen DESC
+            """, (device_id, device_id))
+            
+            neighbors = []
+            for row in cursor.fetchall():
+                neighbors.append({
+                    'neighbor_id': row[0],
+                    'source_device_id': row[1],
+                    'source_name': row[2],
+                    'source_interface': row[3],
+                    'destination_device_id': row[4],
+                    'dest_name': row[5],
+                    'destination_interface': row[6],
+                    'protocol': row[7],
+                    'first_seen': row[8],
+                    'last_seen': row[9]
+                })
+            
+            cursor.close()
+            return neighbors
+            
+        except pyodbc.Error as e:
+            self.logger.error(f"Error querying device neighbors: {e}")
+            return []
+    
+    def get_neighbors_by_protocol(self, protocol: str) -> List[Dict[str, Any]]:
+        """
+        Query connections filtered by protocol (CDP or LLDP)
+        
+        Args:
+            protocol: Protocol type ('CDP' or 'LLDP')
+            
+        Returns:
+            List of connections with all fields
+        """
+        if not self.enabled or not self.is_connected():
+            return []
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute("""
+                SELECT 
+                    n.neighbor_id,
+                    n.source_device_id,
+                    d1.device_name AS source_name,
+                    n.source_interface,
+                    n.destination_device_id,
+                    d2.device_name AS dest_name,
+                    n.destination_interface,
+                    n.protocol,
+                    n.first_seen,
+                    n.last_seen
+                FROM device_neighbors n
+                INNER JOIN devices d1 ON n.source_device_id = d1.device_id
+                INNER JOIN devices d2 ON n.destination_device_id = d2.device_id
+                WHERE n.protocol = ?
+                ORDER BY n.last_seen DESC
+            """, (protocol,))
+            
+            neighbors = []
+            for row in cursor.fetchall():
+                neighbors.append({
+                    'neighbor_id': row[0],
+                    'source_device_id': row[1],
+                    'source_name': row[2],
+                    'source_interface': row[3],
+                    'destination_device_id': row[4],
+                    'dest_name': row[5],
+                    'destination_interface': row[6],
+                    'protocol': row[7],
+                    'first_seen': row[8],
+                    'last_seen': row[9]
+                })
+            
+            cursor.close()
+            return neighbors
+            
+        except pyodbc.Error as e:
+            self.logger.error(f"Error querying neighbors by protocol: {e}")
+            return []
+    
+    def get_all_connections(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve all neighbor connections from database
+        
+        Returns:
+            List of all connection dictionaries
+        """
+        if not self.enabled or not self.is_connected():
+            return []
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute("""
+                SELECT 
+                    n.neighbor_id,
+                    n.source_device_id,
+                    d1.device_name AS source_name,
+                    n.source_interface,
+                    n.destination_device_id,
+                    d2.device_name AS dest_name,
+                    n.destination_interface,
+                    n.protocol,
+                    n.first_seen,
+                    n.last_seen
+                FROM device_neighbors n
+                INNER JOIN devices d1 ON n.source_device_id = d1.device_id
+                INNER JOIN devices d2 ON n.destination_device_id = d2.device_id
+                ORDER BY d1.device_name, d2.device_name
+            """)
+            
+            connections = []
+            for row in cursor.fetchall():
+                connections.append({
+                    'neighbor_id': row[0],
+                    'source_device_id': row[1],
+                    'source_name': row[2],
+                    'source_interface': row[3],
+                    'destination_device_id': row[4],
+                    'dest_name': row[5],
+                    'destination_interface': row[6],
+                    'protocol': row[7],
+                    'first_seen': row[8],
+                    'last_seen': row[9]
+                })
+            
+            cursor.close()
+            return connections
+            
+        except pyodbc.Error as e:
+            self.logger.error(f"Error querying all connections: {e}")
+            return []
+
+    def cleanup_stale_neighbors(self, days: int) -> int:
+        """
+        Delete neighbors not seen in specified days
+        
+        Args:
+            days: Number of days - delete neighbors older than this
+            
+        Returns:
+            Count of neighbors deleted
+        """
+        if not self.enabled or not self.is_connected():
+            return 0
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # Get count before deletion
+            cursor.execute("""
+                SELECT COUNT(*) FROM device_neighbors 
+                WHERE last_seen < DATEADD(day, -?, GETDATE())
+            """, (days,))
+            
+            count = cursor.fetchone()[0]
+            
+            if count == 0:
+                self.logger.info("No stale neighbors to clean up")
+                return 0
+            
+            # Delete stale neighbors
+            cursor.execute("""
+                DELETE FROM device_neighbors 
+                WHERE last_seen < DATEADD(day, -?, GETDATE())
+            """, (days,))
+            
+            self.connection.commit()
+            cursor.close()
+            
+            self.logger.info(f"Cleaned up {count} stale neighbor connections")
+            return count
+            
+        except pyodbc.Error as e:
+            self.logger.error(f"Error cleaning up stale neighbors: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return 0

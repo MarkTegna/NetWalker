@@ -76,3 +76,18 @@ class DeviceVLAN:
     last_seen: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+@dataclass
+class DeviceNeighbor:
+    """Represents a neighbor connection between two devices"""
+    neighbor_id: Optional[int] = None
+    source_device_id: int = 0
+    source_interface: str = ""
+    destination_device_id: int = 0
+    destination_interface: str = ""
+    protocol: str = ""
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

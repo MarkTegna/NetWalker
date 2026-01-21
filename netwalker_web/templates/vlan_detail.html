@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}VLAN {{ vlan[1] }} - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / 
+    <a href="{{ url_for('vlans') }}">VLANs</a> / 
+    VLAN {{ vlan[1] }}
+</div>
+
+<a href="javascript:goBack()" class="back-link">← Back to VLANs</a>
+
+<div class="card">
+    <h2>VLAN Information</h2>
+    <div class="detail-grid">
+        <div class="detail-label">VLAN Number:</div>
+        <div class="detail-value"><strong>{{ vlan[1] }}</strong></div>
+        
+        <div class="detail-label">VLAN Name:</div>
+        <div class="detail-value">{{ vlan[2] }}</div>
+        
+        <div class="detail-label">First Seen:</div>
+        <div class="detail-value">{{ vlan[3]|datetime_format }}</div>
+        
+        <div class="detail-label">Last Seen:</div>
+        <div class="detail-value">{{ vlan[4]|datetime_format }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Devices with this VLAN ({{ devices|length }})</h2>
+    {% if devices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Platform</th>
+                <th>Port Count</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for device in devices %}
+            <tr class="clickable" data-href="{{ url_for('device_detail', device_id=device[0]) }}">
+                <td><strong>{{ device[1] }}</strong></td>
+                <td><span class="badge badge-info">{{ device[2] or 'Unknown' }}</span></td>
+                <td>{{ device[3] or 0 }}</td>
+                <td>{{ device[4]|datetime_format }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">Click on a device to view details.</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No devices found with this VLAN</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

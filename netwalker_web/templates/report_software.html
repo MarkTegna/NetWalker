@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Software Version Distribution - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / 
+    <a href="{{ url_for('reports') }}">Reports</a> / 
+    Software Versions
+</div>
+
+<a href="{{ url_for('reports') }}" class="back-link">← Back to Reports</a>
+
+<div class="card">
+    <h2>Software Version Distribution Report</h2>
+    <p style="margin-bottom: 1rem; color: #7f8c8d;">Current software versions across all active devices</p>
+    
+    {% if versions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Software Version</th>
+                <th>Device Count</th>
+                <th>Percentage</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% set total = versions|sum(attribute=1) %}
+            {% for version in versions %}
+            <tr>
+                <td><strong>{{ version[0] }}</strong></td>
+                <td>{{ version[1] }}</td>
+                <td>{{ "%.1f"|format((version[1] / total * 100) if total > 0 else 0) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">Total: {{ total }} devices</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No software version data available</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

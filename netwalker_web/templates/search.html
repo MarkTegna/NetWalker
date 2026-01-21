@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Search Results - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / Search
+</div>
+
+<div class="card">
+    <h2>Search Results for "{{ query }}"</h2>
+    
+    {% if query %}
+        {% set total_results = (results.devices|length) + (results.vlans|length) + (results.interfaces|length) %}
+        
+        {% if total_results > 0 %}
+            <p style="margin-bottom: 2rem; color: #7f8c8d;">Found {{ total_results }} result(s)</p>
+            
+            {% if results.devices %}
+            <h3 style="margin-top: 1.5rem; margin-bottom: 1rem; color: #2c3e50;">Devices ({{ results.devices|length }})</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Device Name</th>
+                        <th>Serial Number</th>
+                        <th>Platform</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for device in results.devices %}
+                    <tr class="clickable" data-href="{{ url_for('device_detail', device_id=device[0]) }}">
+                        <td><strong>{{ device[1] }}</strong></td>
+                        <td>{{ device[2] }}</td>
+                        <td><span class="badge badge-info">{{ device[3] or 'Unknown' }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+            
+            {% if results.vlans %}
+            <h3 style="margin-top: 1.5rem; margin-bottom: 1rem; color: #2c3e50;">VLANs ({{ results.vlans|length }})</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>VLAN Number</th>
+                        <th>VLAN Name</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for vlan in results.vlans %}
+                    <tr class="clickable" data-href="{{ url_for('vlan_detail', vlan_id=vlan[0]) }}">
+                        <td><strong>{{ vlan[1] }}</strong></td>
+                        <td>{{ vlan[2] }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+            
+            {% if results.interfaces %}
+            <h3 style="margin-top: 1.5rem; margin-bottom: 1rem; color: #2c3e50;">Interfaces ({{ results.interfaces|length }})</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Device Name</th>
+                        <th>Interface Name</th>
+                        <th>IP Address</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for interface in results.interfaces %}
+                    <tr class="clickable" data-href="{{ url_for('interface_detail', interface_id=interface[0]) }}">
+                        <td><strong>{{ interface[1] }}</strong></td>
+                        <td>{{ interface[2] }}</td>
+                        <td>{{ interface[3] }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        {% else %}
+            <div class="empty-state">
+                <p>No results found for "{{ query }}"</p>
+                <p style="margin-top: 1rem;">Try searching for:</p>
+                <ul style="list-style: none; margin-top: 0.5rem;">
+                    <li>Device names</li>
+                    <li>Serial numbers</li>
+                    <li>VLAN names or numbers</li>
+                    <li>IP addresses</li>
+                </ul>
+            </div>
+        {% endif %}
+    {% else %}
+        <div class="empty-state">
+            <p>Enter a search term to find devices, VLANs, or interfaces</p>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,26 @@
+[database]
+# SQL Server connection details
+server = eit-prisqldb01.tgna.tegna.com
+port = 1433
+database = NetWalker
+username = NetWalker
+password = FluffyBunnyHitbyaBus
+
+# ODBC Driver (use one of these)
+# driver = ODBC Driver 17 for SQL Server
+# driver = ODBC Driver 18 for SQL Server
+# driver = SQL Server
+driver = ODBC Driver 17 for SQL Server
+
+# Connection settings
+trust_server_certificate = true
+connection_timeout = 30
+
+[web]
+# Web server settings
+host = 0.0.0.0
+port = 5000
+debug = true
+
+# Secret key for session management (change this in production!)
+secret_key = change-this-to-a-random-secret-key-in-production

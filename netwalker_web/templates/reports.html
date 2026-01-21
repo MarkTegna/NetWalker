@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Reports - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / Reports
+</div>
+
+<div class="card">
+    <h2>Available Reports</h2>
+    <p style="margin-bottom: 2rem; color: #7f8c8d;">Select a report to view detailed analysis of your network inventory.</p>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+        <div class="stat-card" style="text-align: left; cursor: pointer;" onclick="window.location.href='{{ url_for('report_platforms') }}'">
+            <h3>Platform Distribution</h3>
+            <p style="color: #7f8c8d; margin-top: 0.5rem;">View device count by platform type (IOS, IOS-XE, NX-OS, etc.)</p>
+            <a href="{{ url_for('report_platforms') }}" class="btn" style="margin-top: 1rem;">View Report</a>
+        </div>
+        
+        <div class="stat-card" style="text-align: left; cursor: pointer;" onclick="window.location.href='{{ url_for('report_software') }}'">
+            <h3>Software Versions</h3>
+            <p style="color: #7f8c8d; margin-top: 0.5rem;">View software version distribution across all devices</p>
+            <a href="{{ url_for('report_software') }}" class="btn" style="margin-top: 1rem;">View Report</a>
+        </div>
+        
+        <div class="stat-card" style="text-align: left; cursor: pointer;" onclick="window.location.href='{{ url_for('report_stale') }}'">
+            <h3>Stale Devices</h3>
+            <p style="color: #7f8c8d; margin-top: 0.5rem;">Find devices not seen recently (default: 30 days)</p>
+            <a href="{{ url_for('report_stale') }}" class="btn" style="margin-top: 1rem;">View Report</a>
+        </div>
+        
+        <div class="stat-card" style="text-align: left; cursor: pointer;" onclick="window.location.href='{{ url_for('report_vlan_consistency') }}'">
+            <h3>VLAN Consistency</h3>
+            <p style="color: #7f8c8d; margin-top: 0.5rem;">Find VLANs with inconsistent names across devices</p>
+            <a href="{{ url_for('report_vlan_consistency') }}" class="btn" style="margin-top: 1rem;">View Report</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

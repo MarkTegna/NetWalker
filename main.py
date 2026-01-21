@@ -143,6 +143,30 @@ Version: {__version__}
         version=f'NetWalker {__version__} by {__author__}'
     )
     
+    # Visio generator options
+    parser.add_argument(
+        '--visio',
+        action='store_true',
+        help='Generate Visio topology diagrams from database'
+    )
+    
+    parser.add_argument(
+        '--visio-output',
+        default='./visio_diagrams',
+        help='Output directory for Visio files (default: ./visio_diagrams)'
+    )
+    
+    parser.add_argument(
+        '--visio-site',
+        help='Generate diagram for specific site only (e.g., BORO)'
+    )
+    
+    parser.add_argument(
+        '--visio-all-in-one',
+        action='store_true',
+        help='Generate single diagram with all devices'
+    )
+    
     # Database options
     parser.add_argument(
         '--db-init',
@@ -227,6 +251,164 @@ def main():
     try:
         # Parse command-line arguments
         args = parse_arguments()
+        
+        # Handle Visio generation command
+        if args.visio:
+            from netwalker.config.config_manager import ConfigurationManager
+            from netwalker.database import DatabaseManager
+            import pyodbc
+            import logging
+            
+            # Try to import COM generator, fall back to vsdx if not available
+            try:
+                from netwalker.reports.visio_generator_com import VisioGeneratorCOM
+                use_com = True
+                logger_msg = "Using COM automation (requires Microsoft Visio)"
+            except ImportError:
+                from netwalker.reports.visio_generator import VisioGenerator
+                use_com = False
+                logger_msg = "Using vsdx library (limited connector support)"
+            
+            # Setup logging
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s'
+            )
+            logger = logging.getLogger(__name__)
+            logger.info(logger_msg)
+            
+            print("=" * 70)
+            print(f"NetWalker Visio Diagram Generator v{__version__}")
+            print(f"Author: {__author__}")
+            print("=" * 70)
+            print()
+            
+            try:
+                # Load configuration
+                config_manager = ConfigurationManager(args.config)
+                parsed_config = config_manager.load_configuration()
+                db_config = parsed_config.get('database', {})
+                
+                # Initialize database manager
+                logger.info("Initializing database manager...")
+                db_manager = DatabaseManager(db_config)
+                
+                if not db_manager.connect():
+                    logger.error("Failed to connect to database")
+                    print("\n[FAIL] Could not connect to database")
+                    return 1
+                
+                # Get devices from database
+                logger.info("Querying devices from database...")
+                connection = db_manager.connection
+                cursor = connection.cursor()
+                query = """
+                    SELECT device_name, platform, hardware_model, serial_number
+                    FROM devices
+                    WHERE status = 'active'
+                    ORDER BY device_name
+                """
+                cursor.execute(query)
+                
+                devices = []
+                for row in cursor.fetchall():
+                    devices.append({
+                        'device_name': row[0],
+                        'platform': row[1] or 'Unknown',
+                        'hardware_model': row[2] or '',
+                        'serial_number': row[3] or ''
+                    })
+                cursor.close()
+                
+                logger.info(f"Retrieved {len(devices)} active devices from database")
+                
+                # Group devices by site
+                devices_by_site = {}
+                for device in devices:
+                    device_name = device['device_name']
+                    if len(device_name) >= 4:
+                        site_code = device_name[:4].upper()
+                    else:
+                        site_code = 'UNKNOWN'
+                    
+                    if site_code not in devices_by_site:
+                        devices_by_site[site_code] = []
+                    devices_by_site[site_code].append(device)
+                
+                logger.info(f"Grouped devices into {len(devices_by_site)} sites")
+                
+                # Initialize Visio generator with database manager
+                logger.info(f"Initializing Visio generator (output: {args.visio_output})...")
+                if use_com:
+                    visio_gen = VisioGeneratorCOM(args.visio_output, database_manager=db_manager)
+                else:
+                    visio_gen = VisioGenerator(args.visio_output, database_manager=db_manager)
+                
+                # Generate diagrams (connections will be queried from database automatically)
+                
+                if args.visio_all_in_one:
+                    # Generate single diagram with all devices
+                    logger.info("Generating single diagram with all devices...")
+                    filepath = visio_gen.generate_topology_diagram(
+                        devices,
+                        site_name="Complete Network"
+                    )
+                    
+                    if filepath:
+                        print(f"\n[OK] Generated diagram: {filepath}")
+                    else:
+                        print("\n[FAIL] Failed to generate diagram")
+                        return 1
+                
+                elif args.visio_site:
+                    # Generate diagram for specific site
+                    logger.info(f"Generating diagram for site: {args.visio_site}...")
+                    
+                    if args.visio_site not in devices_by_site:
+                        logger.error(f"Site not found: {args.visio_site}")
+                        logger.info(f"Available sites: {', '.join(devices_by_site.keys())}")
+                        return 1
+                    
+                    site_devices = devices_by_site[args.visio_site]
+                    filepath = visio_gen.generate_topology_diagram(
+                        site_devices,
+                        site_name=args.visio_site
+                    )
+                    
+                    if filepath:
+                        print(f"\n[OK] Generated diagram: {filepath}")
+                    else:
+                        print("\n[FAIL] Failed to generate diagram")
+                        return 1
+                
+                else:
+                    # Generate separate diagrams for each site
+                    logger.info("Generating diagrams for all sites...")
+                    
+                    generated_files = []
+                    for site_name, site_devices in devices_by_site.items():
+                        filepath = visio_gen.generate_topology_diagram(
+                            site_devices,
+                            site_name=site_name
+                        )
+                        if filepath:
+                            generated_files.append(filepath)
+                    
+                    print(f"\n[OK] Generated {len(generated_files)} diagram(s):")
+                    for filepath in generated_files:
+                        print(f"  - {filepath}")
+                
+                # Disconnect from database
+                db_manager.disconnect()
+                logger.info("Database connection closed")
+                
+                print("\nVisio diagram generation complete!")
+                return 0
+                
+            except Exception as e:
+                logger.error(f"Visio generation failed: {e}")
+                logger.exception("Full exception details:")
+                return 1
         
         # Handle database commands (these don't require full app initialization)
         if args.db_init or args.db_purge or args.db_purge_devices or args.db_status:

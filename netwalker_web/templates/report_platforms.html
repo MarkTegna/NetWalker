@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Platform Distribution - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / 
+    <a href="{{ url_for('reports') }}">Reports</a> / 
+    Platform Distribution
+</div>
+
+<a href="{{ url_for('reports') }}" class="back-link">← Back to Reports</a>
+
+<div class="card">
+    <h2>Platform Distribution Report</h2>
+    <p style="margin-bottom: 1rem; color: #7f8c8d;">Device count by platform type</p>
+    
+    {% if platforms %}
+    <table>
+        <thead>
+            <tr>
+                <th>Platform</th>
+                <th>Device Count</th>
+                <th>Percentage</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% set total = platforms|sum(attribute=1) %}
+            {% for platform in platforms %}
+            <tr>
+                <td><span class="badge badge-info">{{ platform[0] }}</span></td>
+                <td><strong>{{ platform[1] }}</strong></td>
+                <td>{{ "%.1f"|format((platform[1] / total * 100) if total > 0 else 0) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">Total: {{ total }} devices</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No platform data available</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

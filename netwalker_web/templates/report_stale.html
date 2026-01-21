@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Stale Devices - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / 
+    <a href="{{ url_for('reports') }}">Reports</a> / 
+    Stale Devices
+</div>
+
+<a href="{{ url_for('reports') }}" class="back-link">← Back to Reports</a>
+
+<div class="card">
+    <h2>Stale Devices Report</h2>
+    <p style="margin-bottom: 1rem; color: #7f8c8d;">Devices not seen in the last {{ days }} days</p>
+    
+    <form method="get" class="filter-bar">
+        <label>Days threshold:</label>
+        <input type="number" name="days" value="{{ days }}" min="1" max="365" style="width: 100px;">
+        <button type="submit" class="btn">Update</button>
+    </form>
+    
+    {% if devices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Platform</th>
+                <th>Last Seen</th>
+                <th>Days Ago</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for device in devices %}
+            <tr>
+                <td><strong>{{ device[0] }}</strong></td>
+                <td><span class="badge badge-info">{{ device[1] or 'Unknown' }}</span></td>
+                <td>{{ device[2]|datetime_format }}</td>
+                <td>
+                    {% if device[3] > 90 %}
+                    <span class="badge badge-danger">{{ device[3] }} days</span>
+                    {% elif device[3] > 60 %}
+                    <span class="badge badge-warning">{{ device[3] }} days</span>
+                    {% else %}
+                    <span class="badge badge-info">{{ device[3] }} days</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">{{ devices|length }} stale device(s) found</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No stale devices found (all devices seen within {{ days }} days)</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

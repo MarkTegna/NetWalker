@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Devices - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / Devices
+</div>
+
+<div class="card">
+    <h2>Devices</h2>
+    
+    <form method="get" class="filter-bar">
+        <input type="text" name="search" placeholder="Search by name or serial..." value="{{ search }}">
+        
+        <select name="platform">
+            <option value="">All Platforms</option>
+            {% for platform in platforms %}
+            <option value="{{ platform }}" {% if platform == selected_platform %}selected{% endif %}>{{ platform }}</option>
+            {% endfor %}
+        </select>
+        
+        <select name="status">
+            <option value="active" {% if status == 'active' %}selected{% endif %}>Active</option>
+            <option value="purge" {% if status == 'purge' %}selected{% endif %}>Purge</option>
+            <option value="">All Status</option>
+        </select>
+        
+        <button type="submit" class="btn">Filter</button>
+        <a href="{{ url_for('devices') }}" class="btn btn-secondary">Clear</a>
+    </form>
+    
+    {% if devices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Serial Number</th>
+                <th>Platform</th>
+                <th>Hardware Model</th>
+                <th>Last Seen</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for device in devices %}
+            <tr class="clickable" data-href="{{ url_for('device_detail', device_id=device[0]) }}">
+                <td><strong>{{ device[1] }}</strong></td>
+                <td>{{ device[2] }}</td>
+                <td><span class="badge badge-info">{{ device[3] or 'Unknown' }}</span></td>
+                <td>{{ device[4] or 'N/A' }}</td>
+                <td>{{ device[5]|datetime_format }}</td>
+                <td>
+                    {% if device[6] == 'active' %}
+                    <span class="badge badge-success">Active</span>
+                    {% else %}
+                    <span class="badge badge-warning">{{ device[6] }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">{{ devices|length }} device(s) found. Click on a row to view details.</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No devices found matching your criteria</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

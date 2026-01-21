@@ -89,11 +89,13 @@ The NetWalker Tool is a Windows-based Python application that automatically disc
 
 #### Acceptance Criteria
 
-1. WHEN Visio output is requested, THE Report_Generator SHALL use pywin32 COM interface exclusively
-2. IF Microsoft Visio is not installed, THEN THE NetWalker SHALL generate an error message and abort Visio operations
-3. WHEN creating Visio documents, THE Report_Generator SHALL build documents from scratch without external templates
-4. WHEN Visio operations complete, THE Report_Generator SHALL properly clean up all COM resources
-5. WHEN generating topology diagrams, THE Report_Generator SHALL create visual representations of device connections
+1. WHEN Visio output is requested, THE Report_Generator SHALL use the vsdx Python library to generate .vsdx files
+2. THE NetWalker SHALL NOT require Microsoft Visio to be installed on the system
+3. WHEN creating Visio documents, THE Report_Generator SHALL build documents programmatically without external templates
+4. WHEN generating topology diagrams, THE Report_Generator SHALL create visual representations of device connections with proper shapes and connectors
+5. WHEN generating topology diagrams, THE Report_Generator SHALL organize devices hierarchically (core, distribution, access layers)
+6. WHEN generating topology diagrams, THE Report_Generator SHALL use color coding to distinguish device types
+7. WHEN generating topology diagrams, THE Report_Generator SHALL include connection labels showing port information
 
 ### Requirement 7: Configuration Management
 

@@ -19,6 +19,7 @@ from .filtering.filter_manager import FilterManager
 from .discovery.discovery_engine import DiscoveryEngine
 from .discovery.thread_manager import ThreadManager
 from .reports.excel_generator import ExcelReportGenerator
+from .reports.visio_generator import VisioGenerator
 from .output.output_manager import OutputManager
 from .logging_config import setup_logging
 from .validation.dns_validator import DNSValidator

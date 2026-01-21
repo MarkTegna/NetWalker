@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}VLANs - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / VLANs
+</div>
+
+<div class="card">
+    <h2>VLANs</h2>
+    
+    <form method="get" class="filter-bar">
+        <input type="text" name="search" placeholder="Search by VLAN name..." value="{{ search }}">
+        <input type="number" name="vlan_number" placeholder="VLAN Number" value="{{ vlan_number }}">
+        <button type="submit" class="btn">Filter</button>
+        <a href="{{ url_for('vlans') }}" class="btn btn-secondary">Clear</a>
+    </form>
+    
+    {% if vlans %}
+    <table>
+        <thead>
+            <tr>
+                <th>VLAN Number</th>
+                <th>VLAN Name</th>
+                <th>Device Count</th>
+                <th>Total Ports</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for vlan in vlans %}
+            <tr class="clickable" data-href="{{ url_for('vlan_detail', vlan_id=vlan[0]) }}">
+                <td><strong>{{ vlan[1] }}</strong></td>
+                <td>{{ vlan[2] }}</td>
+                <td>{{ vlan[4] or 0 }}</td>
+                <td>{{ vlan[5] or 0 }}</td>
+                <td>{{ vlan[3]|datetime_format }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">{{ vlans|length }} VLAN(s) found. Click on a row to view details.</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No VLANs found matching your criteria</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

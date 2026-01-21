@@ -276,15 +276,22 @@ class ProtocolParser:
             self.logger.error(f"Error parsing LLDP entry: {str(e)}")
             return None
     
-    def _normalize_interface_name(self, interface_name: str) -> str:
+    def _normalize_interface_name(self, interface_name: str, platform: str = None) -> str:
         """
         Normalize interface names for consistency across platforms
         
         Args:
             interface_name: Raw interface name from device output
+            platform: Device platform (IOS, NX-OS, etc.) - optional
             
         Returns:
             Normalized interface name
+            
+        Examples:
+            "Gi1/0/1" → "GigabitEthernet1/0/1"
+            "Eth1/1" → "Ethernet1/1" (NX-OS preserved)
+            "Po1" → "Port-channel1"
+            "mgmt0" → "Management0"
         """
         if not interface_name or interface_name == "Unknown":
             return interface_name
@@ -292,22 +299,57 @@ class ProtocolParser:
         # Remove common prefixes and normalize
         interface_name = interface_name.strip()
         
-        # Handle NEXUS interface formats
-        # Ethernet1/1 -> Eth1/1
-        interface_name = re.sub(r'^Ethernet(\d+/\d+)', r'Eth\1', interface_name)
+        # Detect platform from interface name if not provided
+        if not platform:
+            if re.match(r'^Ethernet\d+/\d+', interface_name):
+                platform = 'NX-OS'
+            else:
+                platform = 'IOS'
         
-        # Handle port-channel formats
-        # port-channel1 -> Po1
-        interface_name = re.sub(r'^port-channel(\d+)', r'Po\1', interface_name, flags=re.IGNORECASE)
+        # Handle NX-OS interface formats - preserve as-is
+        if platform and 'NX-OS' in platform.upper():
+            # NX-OS uses full names already: Ethernet1/1, port-channel1, mgmt0
+            # Standardize port-channel to Port-channel
+            interface_name = re.sub(r'^port-channel(\d+)', r'Port-channel\1', interface_name, flags=re.IGNORECASE)
+            # Standardize management to Management
+            interface_name = re.sub(r'^mgmt(\d+)', r'Management\1', interface_name, flags=re.IGNORECASE)
+            return interface_name
         
-        # Handle management interfaces
-        # mgmt0 -> Mgmt0
-        interface_name = re.sub(r'^mgmt(\d+)', r'Mgmt\1', interface_name, flags=re.IGNORECASE)
+        # IOS abbreviation expansion
+        # GigabitEthernet
+        interface_name = re.sub(r'^Gi(?:gabitEthernet)?(\d+(?:/\d+)*)', r'GigabitEthernet\1', interface_name, flags=re.IGNORECASE)
+        # TenGigabitEthernet
+        interface_name = re.sub(r'^Te(?:nGigabitEthernet)?(\d+(?:/\d+)*)', r'TenGigabitEthernet\1', interface_name, flags=re.IGNORECASE)
+        # FastEthernet
+        interface_name = re.sub(r'^Fa(?:stEthernet)?(\d+(?:/\d+)*)', r'FastEthernet\1', interface_name, flags=re.IGNORECASE)
+        # FortyGigabitEthernet
+        interface_name = re.sub(r'^Fo(?:rtyGigabitEthernet)?(\d+(?:/\d+)*)', r'FortyGigabitEthernet\1', interface_name, flags=re.IGNORECASE)
         
-        # Handle Vlan interfaces
-        # Vlan1 -> Vlan1 (keep as is)
+        # Port-channel standardization
+        interface_name = re.sub(r'^Po(?:rt-channel)?(\d+)', r'Port-channel\1', interface_name, flags=re.IGNORECASE)
+        interface_name = re.sub(r'^PortChannel(\d+)', r'Port-channel\1', interface_name, flags=re.IGNORECASE)
+        
+        # Management interface standardization
+        interface_name = re.sub(r'^mgmt(\d+)', r'Management\1', interface_name, flags=re.IGNORECASE)
+        interface_name = re.sub(r'^Mgmt(\d+)', r'Management\1', interface_name)
+        
+        # Vlan interfaces - keep as is
+        # Loopback interfaces - keep as is
         
         return interface_name
+    
+    def normalize_interface_name(self, interface_name: str, platform: str = None) -> str:
+        """
+        Public method for normalizing interface names
+        
+        Args:
+            interface_name: Raw interface name from device output
+            platform: Device platform (IOS, NX-OS, etc.) - optional
+            
+        Returns:
+            Normalized interface name
+        """
+        return self._normalize_interface_name(interface_name, platform)
     
     def get_neighbor_summary(self, neighbors: List[NeighborInfo]) -> Dict[str, Any]:
         """

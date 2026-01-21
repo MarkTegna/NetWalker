@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Interfaces - NetWalker{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">Home</a> / Interfaces
+</div>
+
+<div class="card">
+    <h2>Interfaces</h2>
+    
+    <form method="get" class="filter-bar">
+        <input type="text" name="search" placeholder="Search by interface, IP, or device..." value="{{ search }}">
+        
+        <select name="type">
+            <option value="">All Types</option>
+            {% for type in types %}
+            <option value="{{ type }}" {% if type == selected_type %}selected{% endif %}>{{ type }}</option>
+            {% endfor %}
+        </select>
+        
+        <button type="submit" class="btn">Filter</button>
+        <a href="{{ url_for('interfaces') }}" class="btn btn-secondary">Clear</a>
+    </form>
+    
+    {% if interfaces %}
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Interface Name</th>
+                <th>IP Address</th>
+                <th>Subnet Mask</th>
+                <th>Type</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for interface in interfaces %}
+            <tr class="clickable" data-href="{{ url_for('interface_detail', interface_id=interface[0]) }}">
+                <td><strong>{{ interface[1] }}</strong></td>
+                <td>{{ interface[2] }}</td>
+                <td>{{ interface[3] }}</td>
+                <td>{{ interface[4] or 'N/A' }}</td>
+                <td><span class="badge badge-info">{{ interface[5] or 'Unknown' }}</span></td>
+                <td>{{ interface[6]|datetime_format }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 1rem; color: #7f8c8d;">{{ interfaces|length }} interface(s) found. Click on a row to view details.</p>
+    {% else %}
+    <div class="empty-state">
+        <p>No interfaces found matching your criteria</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
