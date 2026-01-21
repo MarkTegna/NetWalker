@@ -158,7 +158,7 @@ Version: {__version__}
     
     parser.add_argument(
         '--visio-site',
-        help='Generate diagram for specific site only (e.g., BORO)'
+        help='Generate diagram for specific site (e.g., BORO) or "EVERYTHING" for all sites'
     )
     
     parser.add_argument(
@@ -361,25 +361,43 @@ def main():
                         return 1
                 
                 elif args.visio_site:
-                    # Generate diagram for specific site
-                    logger.info(f"Generating diagram for site: {args.visio_site}...")
-                    
-                    if args.visio_site not in devices_by_site:
-                        logger.error(f"Site not found: {args.visio_site}")
-                        logger.info(f"Available sites: {', '.join(devices_by_site.keys())}")
-                        return 1
-                    
-                    site_devices = devices_by_site[args.visio_site]
-                    filepath = visio_gen.generate_topology_diagram(
-                        site_devices,
-                        site_name=args.visio_site
-                    )
-                    
-                    if filepath:
-                        print(f"\n[OK] Generated diagram: {filepath}")
+                    # Check if user wants all sites
+                    if args.visio_site.upper() == "EVERYTHING":
+                        # Generate separate diagrams for each site
+                        logger.info("Generating diagrams for all sites (EVERYTHING specified)...")
+                        
+                        generated_files = []
+                        for site_name, site_devices in devices_by_site.items():
+                            filepath = visio_gen.generate_topology_diagram(
+                                site_devices,
+                                site_name=site_name
+                            )
+                            if filepath:
+                                generated_files.append(filepath)
+                        
+                        print(f"\n[OK] Generated {len(generated_files)} diagram(s):")
+                        for filepath in generated_files:
+                            print(f"  - {filepath}")
                     else:
-                        print("\n[FAIL] Failed to generate diagram")
-                        return 1
+                        # Generate diagram for specific site
+                        logger.info(f"Generating diagram for site: {args.visio_site}...")
+                        
+                        if args.visio_site not in devices_by_site:
+                            logger.error(f"Site not found: {args.visio_site}")
+                            logger.info(f"Available sites: {', '.join(devices_by_site.keys())}")
+                            return 1
+                        
+                        site_devices = devices_by_site[args.visio_site]
+                        filepath = visio_gen.generate_topology_diagram(
+                            site_devices,
+                            site_name=args.visio_site
+                        )
+                        
+                        if filepath:
+                            print(f"\n[OK] Generated diagram: {filepath}")
+                        else:
+                            print("\n[FAIL] Failed to generate diagram")
+                            return 1
                 
                 else:
                     # Generate separate diagrams for each site

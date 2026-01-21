@@ -867,15 +867,16 @@ class DatabaseManager:
             self.logger.error(f"Error processing device discovery: {e}")
             return False
     
-    def resolve_hostname_to_device_id(self, hostname: str) -> Optional[int]:
+    def resolve_hostname_to_device_id(self, hostname: str, create_if_missing: bool = False) -> Optional[int]:
         """
         Resolve neighbor hostname to device_id
         
         Args:
             hostname: Device hostname (may be FQDN)
+            create_if_missing: If True, create placeholder device record for unwalked neighbors
             
         Returns:
-            device_id if found, None otherwise
+            device_id if found or created, None otherwise
         """
         if not self.enabled or not self.is_connected():
             return None
@@ -899,15 +900,35 @@ class DatabaseManager:
             """, (short_hostname,))
             
             row = cursor.fetchone()
-            cursor.close()
             
             if row:
                 device_id = row[0]
+                cursor.close()
                 self.logger.debug(f"Resolved hostname '{hostname}' to device_id {device_id}")
                 return device_id
             else:
-                self.logger.debug(f"Could not resolve hostname '{hostname}' to device_id")
-                return None
+                # Device not found
+                if create_if_missing:
+                    # Create placeholder device record for unwalked neighbor
+                    self.logger.info(f"Creating placeholder device for unwalked neighbor: {short_hostname}")
+                    
+                    cursor.execute("""
+                        INSERT INTO devices (device_name, serial_number, platform, hardware_model, status)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (short_hostname, 'unknown', 'Unknown', 'Unwalked Neighbor', 'active'))
+                    
+                    cursor.execute("SELECT @@IDENTITY")
+                    device_id = cursor.fetchone()[0]
+                    
+                    self.connection.commit()
+                    cursor.close()
+                    
+                    self.logger.info(f"Created placeholder device '{short_hostname}' with device_id {device_id}")
+                    return device_id
+                else:
+                    cursor.close()
+                    self.logger.debug(f"Could not resolve hostname '{hostname}' to device_id")
+                    return None
                 
         except pyodbc.Error as e:
             self.logger.error(f"Error resolving hostname '{hostname}': {e}")
@@ -1068,7 +1089,8 @@ class DatabaseManager:
                 neighbor_hostname = neighbor.device_id if hasattr(neighbor, 'device_id') else str(neighbor)
                 
                 # Resolve hostname to destination_device_id
-                dest_device_id = self.resolve_hostname_to_device_id(neighbor_hostname)
+                # Create placeholder device if neighbor doesn't exist (unwalked leaf node)
+                dest_device_id = self.resolve_hostname_to_device_id(neighbor_hostname, create_if_missing=True)
                 
                 if not dest_device_id:
                     # Skip if resolution fails
