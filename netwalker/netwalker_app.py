@@ -8,6 +8,7 @@ Provides the primary interface for network topology discovery and reporting.
 import logging
 import sys
 import os
+import socket
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from pathlib import Path
@@ -315,15 +316,33 @@ class NetWalkerApp:
             logger.info("Database management disabled in configuration")
     
     def _load_seed_devices(self):
-        """Load seed devices from configuration"""
-        # First check for CLI-provided seed devices (highest priority)
+        """
+        Load seed devices from configuration.
+        
+        Priority order:
+        1. CLI seed_devices (comma-separated string)
+        2. CLI seed_file (custom file path)
+        3. Default files (seed_device.ini, seed_file.csv)
+        """
+        # Priority 1: CLI-provided seed devices (comma-separated string)
         seed_config = self.config.get('seed_devices', '')
         if seed_config:
             self.seed_devices = [device.strip() for device in seed_config.split(',')]
             logger.info(f"Loaded {len(self.seed_devices)} seed devices from CLI arguments")
             return
         
-        # If no CLI seed devices, try to load from seed_device.ini or seed_file.csv
+        # Priority 2: CLI-provided seed file path (for database-driven discovery)
+        seed_file_path = self.config.get('seed_file', '')
+        if seed_file_path:
+            if os.path.exists(seed_file_path):
+                self.seed_devices = self._parse_seed_file(seed_file_path)
+                logger.info(f"Loaded {len(self.seed_devices)} seed devices from CLI-specified file: {seed_file_path}")
+                return
+            else:
+                logger.error(f"CLI-specified seed file not found: {seed_file_path}")
+                # Continue to check default files as fallback
+        
+        # Priority 3: Default files (seed_device.ini or seed_file.csv)
         seed_files = ['seed_device.ini', 'seed_file.csv']
         
         for seed_file in seed_files:
@@ -336,30 +355,136 @@ class NetWalkerApp:
             logger.warning("No seed devices configured")
     
     def _parse_seed_file(self, filename: str) -> List[str]:
-        """Parse seed device file"""
+        """
+        Parse seed device file and resolve blank IP addresses.
+        
+        For entries with blank IP addresses, attempts to resolve using:
+        1. Database lookup for primary IP
+        2. DNS lookup as fallback
+        
+        Entries that cannot be resolved are skipped with a warning.
+        
+        Args:
+            filename: Path to seed file
+            
+        Returns:
+            List of seed device strings in format "hostname:ip_address"
+        """
+        import csv
+        
         seed_devices = []
         
         try:
             with open(filename, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        # Handle CSV format
-                        if ',' in line:
-                            parts = line.split(',')
-                            hostname = parts[0].strip()
-                            ip_address = parts[1].strip() if len(parts) > 1 else hostname
-                        else:
-                            # Simple hostname/IP format
-                            hostname = line
-                            ip_address = line
+                # Read all lines to check format
+                lines = f.readlines()
+                
+                if not lines:
+                    return seed_devices
+                
+                # Check if first line is a CSV header
+                first_line = lines[0].strip()
+                is_csv_with_header = (',' in first_line and 
+                                     'hostname' in first_line.lower() and 
+                                     'ip' in first_line.lower())
+                
+                if is_csv_with_header:
+                    # Use csv.DictReader for proper CSV parsing with headers
+                    import io
+                    csv_content = ''.join(lines)
+                    reader = csv.DictReader(io.StringIO(csv_content))
+                    
+                    for row in reader:
+                        hostname = row.get('hostname', '').strip()
+                        ip_address = row.get('ip', '').strip()
                         
+                        # Skip entries with empty hostname
+                        if not hostname:
+                            logger.warning("Skipping entry with empty hostname")
+                            continue
+                        
+                        # Detect blank IP addresses and resolve them
+                        if not ip_address or ip_address.isspace():
+                            logger.info(f"Blank IP detected for {hostname}, attempting resolution...")
+                            ip_address = self._resolve_ip_for_hostname(hostname)
+                            
+                            if not ip_address:
+                                logger.warning(f"Skipping {hostname}: could not resolve IP address")
+                                continue
+                        
+                        # Add device with resolved or explicit IP
                         seed_devices.append(f"{hostname}:{ip_address}")
+                else:
+                    # Handle simple line-by-line format (backward compatibility)
+                    for line in lines:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            # Handle CSV format without headers
+                            if ',' in line:
+                                parts = line.split(',')
+                                hostname = parts[0].strip()
+                                ip_address = parts[1].strip() if len(parts) > 1 else ''
+                            else:
+                                # Simple hostname/IP format
+                                hostname = line
+                                ip_address = line
+                            
+                            # Skip entries with empty hostname
+                            if not hostname:
+                                logger.warning("Skipping entry with empty hostname")
+                                continue
+                            
+                            # Detect blank IP addresses and resolve them
+                            if not ip_address or ip_address.isspace():
+                                logger.info(f"Blank IP detected for {hostname}, attempting resolution...")
+                                ip_address = self._resolve_ip_for_hostname(hostname)
+                                
+                                if not ip_address:
+                                    logger.warning(f"Skipping {hostname}: could not resolve IP address")
+                                    continue
+                            
+                            # Add device with resolved or explicit IP
+                            seed_devices.append(f"{hostname}:{ip_address}")
         
         except Exception as e:
             logger.error(f"Failed to parse seed file {filename}: {e}")
         
         return seed_devices
+    
+    def _resolve_ip_for_hostname(self, hostname: str) -> Optional[str]:
+        """
+        Resolve IP address for hostname using fallback chain:
+        1. Database lookup for primary IP
+        2. DNS lookup
+        3. Return None if both fail
+        
+        Args:
+            hostname: Device hostname to resolve
+            
+        Returns:
+            Resolved IP address or None if resolution fails
+        """
+        # Try database first
+        if self.db_manager and self.db_manager.enabled:
+            ip = self.db_manager.get_primary_ip_by_hostname(hostname)
+            if ip:
+                logger.info(f"Resolved {hostname} to {ip} from database")
+                return ip
+        
+        # Try DNS fallback
+        try:
+            ip = socket.gethostbyname(hostname)
+            logger.info(f"Resolved {hostname} to {ip} from DNS")
+            return ip
+        except socket.gaierror as e:
+            logger.warning(f"Failed to resolve {hostname} via database or DNS: {e}")
+            return None
+        except socket.timeout as e:
+            logger.warning(f"DNS timeout for {hostname}: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Unexpected error resolving {hostname}: {e}")
+            return None
     
     def discover_network(self) -> Dict[str, Any]:
         """

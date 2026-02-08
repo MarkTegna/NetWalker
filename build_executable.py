@@ -346,7 +346,6 @@ def create_distribution_package(version):
         'netwalker.ini',
         'seed_file.csv',
         'README.md',
-        'netwalker_visio.py',
         'TEGNA-NETWORK-Template.vsdx',
         'VISIO_GENERATOR_README.md'
     ]
