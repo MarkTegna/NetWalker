@@ -10,6 +10,7 @@ NetWalker is a Windows-based Python application that automatically discovers and
 
 ### Core Functionality
 - **Automated Discovery**: Breadth-first network traversal starting from seed devices
+- **Command Execution**: Execute arbitrary commands on filtered device sets
 - **Dual Protocol Support**: CDP and LLDP neighbor discovery
 - **Connection Flexibility**: SSH with automatic TELNET fallback for legacy devices
 - **Windows Compatible**: Proper TELNET transport for Windows systems
@@ -17,6 +18,7 @@ NetWalker is a Windows-based Python application that automatically discovers and
 
 ### Reporting & Output
 - **Excel Reports**: Comprehensive device inventory and connection details
+- **Command Results**: Export command outputs to timestamped Excel files
 - **Professional Formatting**: Auto-sized columns, filters, and headers
 - **Multiple Workbooks**: Main discovery report plus per-seed device reports
 - **Neighbor Details**: Individual sheets for each seed's neighbors
@@ -92,6 +94,181 @@ netwalker.exe --seed-devices "router1:192.168.1.1,switch1:192.168.1.2" --usernam
 
 # Show help
 netwalker.exe --help
+```
+
+## 🎯 Command Execution
+
+NetWalker can execute arbitrary commands on filtered sets of network devices and export results to Excel. This feature is perfect for collecting operational data, running show commands, or gathering configuration information across multiple devices.
+
+### Quick Start - Execute Commands
+
+```bash
+# Execute command on devices matching a pattern
+netwalker.exe execute --filter "*-SW-*" --command "show version"
+
+# Execute with custom output directory
+netwalker.exe execute --filter "CORE%" --command "show ip route summary" --output ./reports
+
+# Execute with custom config file
+netwalker.exe execute --config custom.ini --filter "%" --command "show interfaces status"
+```
+
+### Command Execution Options
+
+```bash
+netwalker.exe execute [OPTIONS]
+
+Required Arguments:
+  --filter, -f PATTERN      Device name filter pattern (SQL wildcards: % = multiple chars, _ = single char)
+  --command, -cmd COMMAND   Command to execute on devices
+
+Optional Arguments:
+  --config, -c FILE         Configuration file path (default: netwalker.ini)
+  --output, -o DIR          Output directory for Excel file (default: current directory)
+```
+
+### Filter Pattern Examples
+
+```bash
+# Match all devices
+netwalker.exe execute --filter "%" --command "show version"
+
+# Match devices with "SW" in the name
+netwalker.exe execute --filter "%SW%" --command "show interfaces"
+
+# Match devices starting with "CORE"
+netwalker.exe execute --filter "CORE%" --command "show ip route"
+
+# Match devices ending with "-01"
+netwalker.exe execute --filter "%-01" --command "show running-config"
+
+# Match specific pattern (e.g., BORO-SW-UW01, BORO-SW-UW02)
+netwalker.exe execute --filter "BORO-SW-UW%" --command "show ip eigrp neighbors"
+```
+
+### Command Examples
+
+```bash
+# Show version information
+netwalker.exe execute --filter "%" --command "show version"
+
+# Check interface status
+netwalker.exe execute --filter "%SWITCH%" --command "show interfaces status"
+
+# View routing table
+netwalker.exe execute --filter "CORE%" --command "show ip route"
+
+# Check EIGRP neighbors
+netwalker.exe execute --filter "*-RTR-*" --command "show ip eigrp neighbors"
+
+# View running configuration (be careful with sensitive data!)
+netwalker.exe execute --filter "CORE-SW-01" --command "show running-config"
+
+# Check CDP neighbors
+netwalker.exe execute --filter "%" --command "show cdp neighbors detail"
+```
+
+### Output Format
+
+Command execution generates an Excel file with the following format:
+
+**Filename**: `Command_Results_YYYYMMDD-HH-MM.xlsx`
+
+**Columns**:
+- **Device Name**: Hostname of the device
+- **Device IP**: IP address used for connection
+- **Status**: Success, Failed, Timeout, or Auth Failed
+- **Command Output**: Complete command output (preserves line breaks)
+- **Execution Time**: Time taken in seconds
+
+**Example Console Output**:
+```
+Command Execution: show ip eigrp neighbors
+================================================================================
+Found 15 devices matching filter
+
+Connecting to devices...
+  [1/15] Connecting to BORO-SW-UW01 (10.1.1.1)...
+    [OK] BORO-SW-UW01: Command executed successfully
+  [2/15] Connecting to BORO-SW-UW02 (10.1.1.2)...
+    [FAIL] BORO-SW-UW02: Connection timeout
+  [3/15] Connecting to BORO-SW-UW03 (10.1.1.3)...
+    [OK] BORO-SW-UW03: Command executed successfully
+
+================================================================================
+Execution Summary:
+  Total devices: 15
+  Successful: 13
+  Failed: 2
+  Total time: 45.3 seconds
+
+Results exported to: Command_Results_20260209-19-15.xlsx
+================================================================================
+```
+
+### Configuration
+
+Add command executor settings to `netwalker.ini`:
+
+```ini
+[command_executor]
+# Connection timeout in seconds (default: 30)
+connection_timeout = 30
+
+# SSH strict key checking (default: false)
+ssh_strict_key = false
+
+# Output directory for Excel files (default: current directory)
+output_directory = ./reports
+```
+
+### Credentials
+
+Command execution uses the same credential system as discovery:
+
+1. **Credentials File** (`secret_creds.ini`):
+   ```ini
+   [credentials]
+   username = admin
+   password = mypassword
+   enable_password = myenablepass
+   ```
+
+2. **Encrypted Passwords** (recommended):
+   ```ini
+   [credentials]
+   username = admin
+   password = ENC:bXlwYXNzd29yZA==
+   enable_password = ENC:bXllbmFibGVwYXNz
+   ```
+
+3. **Interactive Prompting**: If credentials are not found, NetWalker will prompt for them.
+
+### Use Cases
+
+**Collect Version Information**:
+```bash
+netwalker.exe execute --filter "%" --command "show version" --output ./audit
+```
+
+**Check Interface Status Across Switches**:
+```bash
+netwalker.exe execute --filter "%SWITCH%" --command "show interfaces status"
+```
+
+**Verify EIGRP Neighbors**:
+```bash
+netwalker.exe execute --filter "%RTR%" --command "show ip eigrp neighbors"
+```
+
+**Audit Configuration**:
+```bash
+netwalker.exe execute --filter "CORE%" --command "show running-config | include logging"
+```
+
+**Troubleshoot Connectivity**:
+```bash
+netwalker.exe execute --filter "%" --command "show ip interface brief"
 ```
 
 ## 🔧 System Requirements
@@ -190,12 +367,72 @@ Warning: Max depth reached, stopping discovery
 ```
 **Solution**: Increase `max_depth` in `netwalker.ini` or use filtering to reduce scope.
 
+### Command Execution Issues
+
+**No Devices Found**
+```
+Found 0 devices matching filter
+```
+**Solution**: 
+- Verify your filter pattern uses SQL wildcards (% not *)
+- Check that devices exist in the database (run discovery first)
+- Try a broader filter pattern like "%" to match all devices
+
+**Database Connection Failed**
+```
+Failed to connect to database server: localhost
+```
+**Solution**:
+- Verify database configuration in `netwalker.ini`
+- Ensure SQL Server is running and accessible
+- Check network connectivity to database server
+- Verify database credentials are correct
+
+**Connection Timeout**
+```
+[FAIL] DEVICE-NAME: Connection timeout
+```
+**Solution**:
+- Verify device is reachable (ping test)
+- Check firewall rules allow SSH/TELNET
+- Increase `connection_timeout` in `netwalker.ini`
+- Verify device IP address is correct in database
+
+**Authentication Failed**
+```
+[FAIL] DEVICE-NAME: Auth Failed
+```
+**Solution**:
+- Verify credentials in `secret_creds.ini`
+- Ensure username and password are correct
+- Check if enable password is required
+- Verify account has appropriate privileges
+
+**Excel Export Failed**
+```
+[FAIL] Permission denied writing Excel file
+```
+**Solution**:
+- Close any open Excel files with the same name
+- Verify write permissions to output directory
+- Choose a different output directory with `--output`
+- Check available disk space
+
+**Command Returns Error**
+```
+Status: Success
+Output: % Invalid input detected at '^' marker
+```
+**Note**: This is expected behavior. The connection succeeded, but the command had an error. The status is "Success" because the connection worked, and the error output is captured for analysis.
+
 ### Debug Mode
 Enable detailed logging by editing `netwalker.ini`:
 ```ini
 [logging]
 level = DEBUG
 ```
+
+Logs are saved to the logs directory with timestamps: `netwalker_YYYYMMDD-HH-MM.log`
 
 ## 🧪 Development & Testing
 

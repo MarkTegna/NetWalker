@@ -78,28 +78,58 @@ def create_parser():
     
     # Visio generator command
     visio_parser = subparsers.add_parser('visio', help='Generate Visio topology diagrams from database')
-    
+
     visio_parser.add_argument(
         '--config',
         default='netwalker.ini',
         help='Configuration file path (default: netwalker.ini)'
     )
-    
+
     visio_parser.add_argument(
         '--output',
         default='./visio_diagrams',
         help='Output directory for Visio files (default: ./visio_diagrams)'
     )
-    
+
     visio_parser.add_argument(
         '--site',
         help='Generate diagram for specific site only (e.g., BORO)'
     )
-    
+
     visio_parser.add_argument(
         '--all-in-one',
         action='store_true',
         help='Generate single diagram with all devices instead of per-site diagrams'
+    )
+
+    # Execute command
+    execute_parser = subparsers.add_parser(
+        'execute',
+        help='Execute commands on filtered devices'
+    )
+
+    execute_parser.add_argument(
+        '--config', '-c',
+        default='netwalker.ini',
+        help='Configuration file path (default: netwalker.ini)'
+    )
+
+    execute_parser.add_argument(
+        '--filter', '-f',
+        required=True,
+        help='Device name filter pattern (SQL wildcard: %% for multiple chars, _ for single char)'
+    )
+
+    execute_parser.add_argument(
+        '--command', '-cmd',
+        required=True,
+        help='Command to execute on devices'
+    )
+
+    execute_parser.add_argument(
+        '--output', '-o',
+        default='.',
+        help='Output directory for Excel file (default: current directory)'
     )
     
     # Version

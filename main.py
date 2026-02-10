@@ -23,6 +23,7 @@ sys.path.insert(0, str(project_root))
 
 from netwalker.netwalker_app import NetWalkerApp
 from netwalker.version import __version__, __author__
+from netwalker.cli import parse_args as parse_cli_args
 
 # Global variable to track the app instance for signal handling
 _app_instance = None
@@ -289,9 +290,97 @@ def convert_args_to_config(args):
     return config_overrides
 
 
+def handle_execute_command(args):
+    """
+    Handle the 'execute' command to run commands on filtered devices.
+
+    Args:
+        args: Parsed command-line arguments containing:
+            - config: Configuration file path
+            - filter: Device name filter pattern
+            - command: Command to execute
+            - output: Output directory for Excel file
+
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    try:
+        # Import CommandExecutor and exceptions
+        from netwalker.executor.command_executor import CommandExecutor
+        from netwalker.executor.exceptions import (
+            ConfigurationError,
+            CredentialError,
+            DatabaseConnectionError
+        )
+
+        # Setup basic logging for command execution
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+
+        # Create CommandExecutor instance
+        executor = CommandExecutor(
+            config_file=args.config,
+            device_filter=args.filter,
+            command=args.command,
+            output_dir=args.output
+        )
+
+        # Execute commands on filtered devices
+        summary = executor.execute()
+
+        # Return success if we processed devices (even if some failed)
+        if summary.total_devices > 0:
+            return 0
+        else:
+            # No devices found matching filter
+            return 1
+
+    except FileNotFoundError as e:
+        print(f"\n[FAIL] Configuration file not found: {e}")
+        logging.error("Configuration file not found: %s", e)
+        return 1
+
+    except ConfigurationError as e:
+        print(f"\n[FAIL] Configuration error: {e}")
+        logging.error("Configuration error: %s", e)
+        return 1
+
+    except CredentialError as e:
+        print(f"\n[FAIL] Credential error: {e}")
+        logging.error("Credential error: %s", e)
+        return 1
+
+    except DatabaseConnectionError as e:
+        print(f"\n[FAIL] Database connection error: {e}")
+        logging.error("Database connection error: %s", e)
+        return 1
+
+    except Exception as e:
+        print(f"\n[FAIL] Unexpected error: {e}")
+        logging.exception("Unexpected error in command execution")
+        return 1
+
+
 def main():
     """Main application entry point"""
     global _app_instance
+
+    # Check if this is the execute command (new CLI)
+    if len(sys.argv) > 1 and sys.argv[1] == 'execute':
+        # Use new CLI parser for execute command
+        try:
+            args = parse_cli_args()
+            return handle_execute_command(args)
+        except KeyboardInterrupt:
+            print("\nCommand execution interrupted by user")
+            return 130
+        except Exception as e:
+            print(f"\n[FAIL] Unexpected error: {e}")
+            import logging as log_module
+            log_module.exception("Unexpected error in execute command")
+            return 1
 
     # Print console banner with system information
     print_console_banner()
@@ -301,7 +390,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        # Parse command-line arguments
+        # Parse command-line arguments (old style)
         args = parse_arguments()
 
         # Handle Visio generation command
