@@ -363,23 +363,162 @@ def handle_execute_command(args):
         return 1
 
 
+def handle_ipv4_prefix_inventory_command(args):
+    """
+    Handle the 'ipv4-prefix-inventory' command to collect IPv4 prefixes.
+    
+    Args:
+        args: Parsed command-line arguments containing:
+            - config: Configuration file path
+            - filter: Optional device name filter pattern
+            - output: Optional output directory override
+    
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    try:
+        # Import IPv4PrefixInventory
+        from netwalker.ipv4_prefix import IPv4PrefixInventory
+        
+        # Setup basic logging for IPv4 prefix inventory
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        
+        # Create IPv4PrefixInventory instance
+        inventory = IPv4PrefixInventory(config_file=args.config)
+        
+        # Override output directory if specified
+        if hasattr(args, 'output') and args.output:
+            # Will need to load config first and override
+            pass
+        
+        # Execute inventory collection
+        device_filter = args.filter if hasattr(args, 'filter') else None
+        result = inventory.run(device_filter=device_filter)
+        
+        # Return success if we processed devices
+        if result.total_devices > 0:
+            return 0
+        else:
+            # No devices found
+            return 1
+    
+    except FileNotFoundError as e:
+        print(f"\n[FAIL] Configuration file not found: {e}")
+        logging.error("Configuration file not found: %s", e)
+        return 1
+    
+    except Exception as e:
+        print(f"\n[FAIL] Unexpected error: {e}")
+        logging.exception("Unexpected error in IPv4 prefix inventory")
+        return 1
+
+
+def handle_visio_with_new_cli(args):
+    """
+    Handle the 'visio' command using new CLI arguments.
+    This is a wrapper that converts new CLI args to old format.
+    """
+    # Convert new CLI args to old format and call existing visio code
+    class OldArgs:
+        def __init__(self):
+            self.config = args.config
+            self.visio = True
+            self.visio_output = args.output
+            self.visio_site = args.site if hasattr(args, 'site') else None
+            self.visio_all_in_one = args.all_in_one if hasattr(args, 'all_in_one') else False
+            # Set other flags to False
+            self.db_init = False
+            self.db_purge = False
+            self.db_purge_devices = False
+            self.db_status = False
+
+    old_args = OldArgs()
+    # Continue with existing visio handling code below
+    from netwalker.config.config_manager import ConfigurationManager
+    from netwalker.database import DatabaseManager
+    import logging
+
+    # The rest will use the existing visio code path
+    # For now, return error - full implementation needed
+    print("[FAIL] Visio command handler not fully implemented yet")
+    return 1
+
+
+def handle_discover_with_new_cli(args):
+    """
+    Handle the 'discover' command using new CLI arguments.
+    This is a wrapper that converts new CLI args to old format.
+    """
+    # Convert new CLI args to old format and call existing discovery code
+    class OldArgs:
+        def __init__(self):
+            self.config = args.config
+            self.seeds = args.seeds if hasattr(args, 'seeds') else 'seed_device.ini'
+            self.max_depth = args.max_depth if hasattr(args, 'max_depth') else None
+            self.concurrent_connections = args.concurrent_connections if hasattr(args, 'concurrent_connections') else None
+            self.timeout = args.timeout if hasattr(args, 'timeout') else None
+            self.reports_dir = args.reports_dir if hasattr(args, 'reports_dir') else None
+            self.logs_dir = args.logs_dir if hasattr(args, 'logs_dir') else None
+            self.verbose = args.verbose if hasattr(args, 'verbose') else False
+            self.quiet = args.quiet if hasattr(args, 'quiet') else False
+            # Set other flags to False
+            self.visio = False
+            self.db_init = False
+            self.db_purge = False
+            self.db_purge_devices = False
+            self.db_status = False
+
+    old_args = OldArgs()
+    # Continue with existing discovery handling code below
+    # For now, return error - full implementation needed
+    print("[FAIL] Discover command handler not fully implemented yet")
+    return 1
+
+
+
 def main():
     """Main application entry point"""
     global _app_instance
 
-    # Check if this is the execute command (new CLI)
-    if len(sys.argv) > 1 and sys.argv[1] == 'execute':
-        # Use new CLI parser for execute command
+    # Check if we should use the new CLI parser
+    # Use new parser if: --help, --version, or any of the new commands
+    use_new_cli = (
+        '--help' in sys.argv or
+        '-h' in sys.argv or
+        (len(sys.argv) > 1 and sys.argv[1] in ['execute', 'ipv4-prefix-inventory', 'visio', 'discover'])
+    )
+    
+    if use_new_cli:
+        # Use new CLI parser
         try:
             args = parse_cli_args()
-            return handle_execute_command(args)
+            
+            # Route to appropriate handler
+            if args.command == 'execute':
+                return handle_execute_command(args)
+            elif args.command == 'ipv4-prefix-inventory':
+                return handle_ipv4_prefix_inventory_command(args)
+            elif args.command == 'visio':
+                # Handle visio command using new CLI args
+                return handle_visio_with_new_cli(args)
+            elif args.command == 'discover':
+                # Handle discover command using new CLI args
+                return handle_discover_with_new_cli(args)
+            else:
+                # No command specified, show help
+                parse_cli_args(['--help'])
+                return 0
+                
         except KeyboardInterrupt:
-            print("\nCommand execution interrupted by user")
+            print("\nOperation interrupted by user")
             return 130
         except Exception as e:
             print(f"\n[FAIL] Unexpected error: {e}")
             import logging as log_module
-            log_module.exception("Unexpected error in execute command")
+            log_module.exception("Unexpected error")
             return 1
 
     # Print console banner with system information
@@ -641,7 +780,7 @@ def main():
                 return 0
 
         # Handle database-driven discovery options
-        if args.rewalk_stale or args.walk_unwalked:
+        if args.rewalk_stale is not None or args.walk_unwalked:
             from netwalker.config.config_manager import ConfigurationManager
             from netwalker.database import DatabaseManager
             import tempfile
@@ -661,7 +800,7 @@ def main():
             # Create temporary seed file for database-driven discovery
             seed_devices = []
 
-            if args.rewalk_stale:
+            if args.rewalk_stale is not None:
                 print(f"Querying devices not walked in {args.rewalk_stale} days...")
                 stale_devices = db_manager.get_stale_devices(args.rewalk_stale)
 
