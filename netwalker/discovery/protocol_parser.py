@@ -262,13 +262,25 @@ class ProtocolParser:
             capabilities_str = cap_match.group(1).strip() if cap_match else ""
             capabilities = [cap.strip() for cap in capabilities_str.split(',') if cap.strip()]
             
+            # Extract management address (IP address) from LLDP
+            ip_address = None
+            mgmt_match = self.nexus_lldp_mgmt_pattern.search(entry)
+            if mgmt_match:
+                mgmt_addresses = mgmt_match.group(1).strip()
+                # Extract first IPv4 address from management addresses
+                ipv4_pattern = re.compile(r'(\d+\.\d+\.\d+\.\d+)')
+                ipv4_match = ipv4_pattern.search(mgmt_addresses)
+                if ipv4_match:
+                    ip_address = ipv4_match.group(1)
+                    self.logger.debug(f"Extracted management IP {ip_address} from LLDP for {device_id}")
+            
             return NeighborInfo(
                 device_id=device_id,
                 local_interface=local_interface,
                 remote_interface=remote_interface,
                 platform=platform,
                 capabilities=capabilities,
-                ip_address=None,  # LLDP doesn't always provide IP
+                ip_address=ip_address,  # Now includes management address from LLDP if available
                 protocol="LLDP"
             )
             

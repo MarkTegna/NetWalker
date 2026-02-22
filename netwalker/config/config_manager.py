@@ -12,6 +12,7 @@ from .data_models import (
     DiscoveryConfig, FilterConfig, OutputConfig, 
     ExclusionConfig, ConnectionConfig, VLANCollectionConfig
 )
+from netwalker.ipv4_prefix.data_models import IPv4PrefixConfig
 from .blank_detection import ConfigurationBlankHandler
 
 
@@ -54,7 +55,8 @@ class ConfigurationManager:
             'output': self._build_output_config(),
             'connection': self._build_connection_config(),
             'vlan_collection': self._build_vlan_collection_config(),
-            'database': self._build_database_config()
+            'database': self._build_database_config(),
+            'ipv4_prefix_inventory': self._build_ipv4_prefix_config()
         }
         
         self.logger.info(f"Configuration loaded from {self.config_file}")
@@ -129,6 +131,8 @@ ssl_cert_file =
 ssl_key_file = 
 # SSL CA bundle file path (optional)
 ssl_ca_bundle = 
+# Skip devices after this many consecutive connection failures (0 = never skip)
+skip_after_failures = 3
 
 [vlan_collection]
 # Enable VLAN collection during discovery (true/false)
@@ -161,6 +165,26 @@ trust_server_certificate = true
 connection_timeout = 30
 # Command timeout in seconds
 command_timeout = 60
+
+[ipv4_prefix_inventory]
+# Enable collection from global routing table (true/false)
+collect_global_table = true
+# Enable collection from per-VRF routing tables (true/false)
+collect_per_vrf = true
+# Enable collection of BGP prefixes (true/false)
+collect_bgp = true
+# Output directory for CSV and Excel exports
+output_directory = ./reports
+# Create summary statistics file (true/false)
+create_summary_file = true
+# Enable database storage of prefix data (true/false)
+enable_database_storage = true
+# Track route summarization relationships (true/false)
+track_summarization = true
+# Number of devices to process concurrently
+concurrent_devices = 5
+# Command timeout in seconds
+command_timeout = 30
 """
         
         # Write configuration file
@@ -296,6 +320,7 @@ command_timeout = 60
             config.ssl_cert_file = self._config.get('connection', 'ssl_cert_file', fallback=config.ssl_cert_file)
             config.ssl_key_file = self._config.get('connection', 'ssl_key_file', fallback=config.ssl_key_file)
             config.ssl_ca_bundle = self._config.get('connection', 'ssl_ca_bundle', fallback=config.ssl_ca_bundle)
+            config.skip_after_failures = self._config.getint('connection', 'skip_after_failures', fallback=config.skip_after_failures)
             
             # Convert empty strings to None for optional SSL file paths
             if config.ssl_cert_file == '':
@@ -383,6 +408,62 @@ command_timeout = 60
             config['trust_server_certificate'] = self._config.getboolean('database', 'trust_server_certificate', fallback=config['trust_server_certificate'])
             config['connection_timeout'] = self._config.getint('database', 'connection_timeout', fallback=config['connection_timeout'])
             config['command_timeout'] = self._config.getint('database', 'command_timeout', fallback=config['command_timeout'])
+        
+        return config
+    
+    def _build_ipv4_prefix_config(self) -> IPv4PrefixConfig:
+        """Build IPv4 prefix inventory configuration"""
+        # Set defaults
+        config = IPv4PrefixConfig(
+            collect_global_table=True,
+            collect_per_vrf=True,
+            collect_bgp=True,
+            output_directory='./reports',
+            create_summary_file=True,
+            enable_database_storage=True,
+            track_summarization=True,
+            concurrent_devices=5,
+            command_timeout=30
+        )
+        
+        # Load from INI file if section exists
+        if self._config.has_section('ipv4_prefix_inventory'):
+            config.collect_global_table = self._config.getboolean(
+                'ipv4_prefix_inventory', 'collect_global_table', 
+                fallback=config.collect_global_table
+            )
+            config.collect_per_vrf = self._config.getboolean(
+                'ipv4_prefix_inventory', 'collect_per_vrf', 
+                fallback=config.collect_per_vrf
+            )
+            config.collect_bgp = self._config.getboolean(
+                'ipv4_prefix_inventory', 'collect_bgp', 
+                fallback=config.collect_bgp
+            )
+            config.output_directory = self._config.get(
+                'ipv4_prefix_inventory', 'output_directory', 
+                fallback=config.output_directory
+            )
+            config.create_summary_file = self._config.getboolean(
+                'ipv4_prefix_inventory', 'create_summary_file', 
+                fallback=config.create_summary_file
+            )
+            config.enable_database_storage = self._config.getboolean(
+                'ipv4_prefix_inventory', 'enable_database_storage', 
+                fallback=config.enable_database_storage
+            )
+            config.track_summarization = self._config.getboolean(
+                'ipv4_prefix_inventory', 'track_summarization', 
+                fallback=config.track_summarization
+            )
+            config.concurrent_devices = self._config.getint(
+                'ipv4_prefix_inventory', 'concurrent_devices', 
+                fallback=config.concurrent_devices
+            )
+            config.command_timeout = self._config.getint(
+                'ipv4_prefix_inventory', 'command_timeout', 
+                fallback=config.command_timeout
+            )
         
         return config
     

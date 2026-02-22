@@ -234,6 +234,7 @@ class DatabaseManager:
                         platform NVARCHAR(100) NULL,
                         hardware_model NVARCHAR(100) NULL,
                         capabilities NVARCHAR(500) NULL,
+                        connection_failures INT NOT NULL DEFAULT 0,
                         first_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
                         last_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
                         status NVARCHAR(20) NOT NULL DEFAULT 'active',
@@ -253,6 +254,16 @@ class DatabaseManager:
                               AND name = 'capabilities')
                 BEGIN
                     ALTER TABLE devices ADD capabilities NVARCHAR(500) NULL;
+                END
+            """)
+
+            # Add connection_failures column to existing devices table if it doesn't exist
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.columns
+                              WHERE object_id = OBJECT_ID('devices')
+                              AND name = 'connection_failures')
+                BEGIN
+                    ALTER TABLE devices ADD connection_failures INT NOT NULL DEFAULT 0;
                 END
             """)
 
@@ -297,6 +308,35 @@ class DatabaseManager:
                     );
                     CREATE INDEX IX_device_interfaces_ip ON device_interfaces(ip_address);
                     CREATE INDEX IX_device_interfaces_type ON device_interfaces(interface_type);
+                END
+            """)
+
+            # Create device_stack_members table
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_stack_members')
+                BEGIN
+                    CREATE TABLE device_stack_members (
+                        stack_member_id INT IDENTITY(1,1) PRIMARY KEY,
+                        device_id INT NOT NULL,
+                        switch_number INT NOT NULL,
+                        role NVARCHAR(20) NULL,
+                        priority INT NULL,
+                        hardware_model NVARCHAR(100) NULL,
+                        serial_number NVARCHAR(100) NOT NULL,
+                        mac_address NVARCHAR(20) NULL,
+                        software_version NVARCHAR(100) NULL,
+                        state NVARCHAR(20) NULL,
+                        first_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        last_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        CONSTRAINT FK_stack_members_device FOREIGN KEY (device_id)
+                            REFERENCES devices(device_id) ON DELETE CASCADE,
+                        CONSTRAINT UQ_device_switch_serial UNIQUE (device_id, switch_number, serial_number)
+                    );
+                    CREATE INDEX IX_stack_members_device ON device_stack_members(device_id);
+                    CREATE INDEX IX_stack_members_serial ON device_stack_members(serial_number);
+                    CREATE INDEX IX_stack_members_role ON device_stack_members(role);
                 END
             """)
 
@@ -433,6 +473,107 @@ class DatabaseManager:
             if cursor:
                 cursor.close()
 
+    def initialize_ipv4_prefix_schema(self) -> bool:
+        """
+        Create IPv4 prefix inventory tables if they don't exist.
+
+        Creates:
+        - ipv4_prefixes: Stores collected IPv4 prefixes with metadata
+        - ipv4_prefix_summarization: Stores route summarization relationships
+
+        Returns:
+            True if successful, False otherwise
+
+        Requirements:
+            - 14.1: Create ipv4_prefixes table
+            - 14.2: Include specified columns
+            - 14.3: Link to device via device_id foreign key
+            - 15.1: Create ipv4_prefix_summarization table
+            - 15.2: Include specified columns
+            - 15.4: Link summary to component via foreign keys
+        """
+        if not self.enabled:
+            self.logger.warning("Database disabled, cannot initialize IPv4 prefix schema")
+            return False
+
+        if not self.is_connected() and not self.connect():
+            return False
+
+        try:
+            cursor = self.connection.cursor()
+
+            # Create ipv4_prefixes table
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ipv4_prefixes')
+                BEGIN
+                    CREATE TABLE ipv4_prefixes (
+                        prefix_id INT IDENTITY(1,1) PRIMARY KEY,
+                        device_id INT NOT NULL,
+                        vrf NVARCHAR(100) NOT NULL,
+                        prefix NVARCHAR(50) NOT NULL,
+                        source NVARCHAR(20) NOT NULL,
+                        protocol NVARCHAR(10) NULL,
+                        vlan INT NULL,
+                        interface NVARCHAR(100) NULL,
+                        first_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        last_seen DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        CONSTRAINT FK_ipv4_prefixes_device FOREIGN KEY (device_id)
+                            REFERENCES devices(device_id) ON DELETE CASCADE,
+                        CONSTRAINT UQ_device_vrf_prefix_source UNIQUE (device_id, vrf, prefix, source)
+                    );
+                    CREATE INDEX IX_ipv4_prefixes_vrf ON ipv4_prefixes(vrf);
+                    CREATE INDEX IX_ipv4_prefixes_prefix ON ipv4_prefixes(prefix);
+                    CREATE INDEX IX_ipv4_prefixes_source ON ipv4_prefixes(source);
+                    CREATE INDEX IX_ipv4_prefixes_last_seen ON ipv4_prefixes(last_seen);
+                END
+            """)
+
+            # Create ipv4_prefix_summarization table
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ipv4_prefix_summarization')
+                BEGIN
+                    CREATE TABLE ipv4_prefix_summarization (
+                        summarization_id INT IDENTITY(1,1) PRIMARY KEY,
+                        summary_prefix_id INT NOT NULL,
+                        component_prefix_id INT NOT NULL,
+                        device_id INT NOT NULL,
+                        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+                        CONSTRAINT FK_summarization_summary FOREIGN KEY (summary_prefix_id)
+                            REFERENCES ipv4_prefixes(prefix_id) ON DELETE CASCADE,
+                        CONSTRAINT FK_summarization_component FOREIGN KEY (component_prefix_id)
+                            REFERENCES ipv4_prefixes(prefix_id) ON DELETE NO ACTION,
+                        CONSTRAINT FK_summarization_device FOREIGN KEY (device_id)
+                            REFERENCES devices(device_id) ON DELETE NO ACTION,
+                        CONSTRAINT UQ_summarization_relationship UNIQUE (
+                            summary_prefix_id, component_prefix_id, device_id
+                        )
+                    );
+                    CREATE INDEX IX_summarization_summary ON ipv4_prefix_summarization(summary_prefix_id);
+                    CREATE INDEX IX_summarization_component ON ipv4_prefix_summarization(component_prefix_id);
+                    CREATE INDEX IX_summarization_device ON ipv4_prefix_summarization(device_id);
+                END
+            """)
+
+            self.connection.commit()
+            self.logger.info("IPv4 prefix inventory schema initialized successfully")
+            return True
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error initializing IPv4 prefix schema: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error initializing IPv4 prefix schema: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+
     def purge_marked_devices(self) -> int:
         """
         Delete devices marked with status='purge'
@@ -514,7 +655,7 @@ class DatabaseManager:
 
         return status
 
-    def upsert_device(self, device_info: Dict[str, Any]) -> Optional[int]:
+    def upsert_device(self, device_info: Dict[str, Any]) -> Optional[tuple]:
         """
         Insert or update device record
 
@@ -522,7 +663,8 @@ class DatabaseManager:
             device_info: Dictionary with device information
 
         Returns:
-            device_id if successful, None otherwise
+            Tuple of (device_id, is_new_device) if successful, None otherwise
+            is_new_device is True if this was a newly created device, False if updated
         """
         if not self.enabled or not self.is_connected():
             return None
@@ -551,6 +693,7 @@ class DatabaseManager:
 
             row = cursor.fetchone()
 
+            is_new_device = False
             if row:
                 # Update existing device with same name and serial
                 device_id = row[0]
@@ -573,9 +716,9 @@ class DatabaseManager:
                         SELECT device_id FROM devices
                         WHERE device_name = ? AND serial_number = 'unknown'
                     """, (device_name,))
-                    
+
                     unwalked_row = cursor.fetchone()
-                    
+
                     if unwalked_row:
                         # Update the unwalked neighbor record with real data
                         device_id = unwalked_row[0]
@@ -589,8 +732,9 @@ class DatabaseManager:
                                 updated_at = GETDATE()
                             WHERE device_id = ?
                         """, (serial_number, platform, hardware_model, capabilities_str, device_id))
-                        
+
                         self.logger.info(f"Updated unwalked neighbor to walked device: {device_name} (ID: {device_id})")
+                        is_new_device = True  # Count as new since it's now fully walked
                     else:
                         # No unwalked neighbor found, insert new device
                         cursor.execute("""
@@ -602,6 +746,7 @@ class DatabaseManager:
                         device_id = cursor.fetchone()[0]
 
                         self.logger.info(f"Created new device: {device_name} (ID: {device_id})")
+                        is_new_device = True
                 else:
                     # serial_number is 'unknown', just insert as unwalked neighbor
                     cursor.execute("""
@@ -613,10 +758,11 @@ class DatabaseManager:
                     device_id = cursor.fetchone()[0]
 
                     self.logger.info(f"Created new unwalked neighbor: {device_name} (ID: {device_id})")
+                    is_new_device = False  # Don't count unwalked neighbors as new devices
 
             self.connection.commit()
             cursor.close()
-            return device_id
+            return (device_id, is_new_device)
 
         except pyodbc.Error as e:
             self.logger.error(f"Error upserting device {device_name}: {e}")
@@ -865,7 +1011,93 @@ class DatabaseManager:
                 self.connection.rollback()
             return False
 
-    def process_device_discovery(self, device_info: Dict[str, Any]) -> bool:
+    def upsert_stack_members(self, device_id: int, stack_members: List) -> int:
+        """
+        Insert or update stack member records for a device.
+
+        Args:
+            device_id: Device ID
+            stack_members: List of StackMemberInfo objects or dicts
+
+        Returns:
+            Number of stack members stored
+        """
+        if not self.enabled or not self.is_connected():
+            return 0
+
+        try:
+            cursor = self.connection.cursor()
+            member_count = 0
+
+            for member in stack_members:
+                # Handle both dict and object formats
+                switch_number = member.get('switch_number') if hasattr(member, 'get') else getattr(member, 'switch_number')
+                role = member.get('role') if hasattr(member, 'get') else getattr(member, 'role', None)
+                priority = member.get('priority') if hasattr(member, 'get') else getattr(member, 'priority', None)
+                hardware_model = member.get('hardware_model') if hasattr(member, 'get') else getattr(member, 'hardware_model')
+                serial_number = member.get('serial_number') if hasattr(member, 'get') else getattr(member, 'serial_number')
+                mac_address = member.get('mac_address') if hasattr(member, 'get') else getattr(member, 'mac_address', None)
+                software_version = member.get('software_version') if hasattr(member, 'get') else getattr(member, 'software_version', None)
+                state = member.get('state') if hasattr(member, 'get') else getattr(member, 'state', None)
+
+                # Check if this stack member already exists
+                cursor.execute("""
+                    SELECT stack_member_id, serial_number, hardware_model 
+                    FROM device_stack_members
+                    WHERE device_id = ? AND switch_number = ?
+                """, (device_id, switch_number))
+
+                row = cursor.fetchone()
+
+                if row:
+                    # Update existing stack member
+                    old_serial = row[1]
+                    old_model = row[2]
+                    
+                    # Log updates for debugging
+                    if old_serial != serial_number:
+                        self.logger.info(f"Updating stack member {switch_number} serial: {old_serial} -> {serial_number}")
+                    if old_model != hardware_model:
+                        self.logger.info(f"Updating stack member {switch_number} model: {old_model} -> {hardware_model}")
+                    
+                    cursor.execute("""
+                        UPDATE device_stack_members
+                        SET role = ?,
+                            priority = ?,
+                            hardware_model = ?,
+                            serial_number = ?,
+                            mac_address = ?,
+                            software_version = ?,
+                            state = ?,
+                            last_seen = GETDATE(),
+                            updated_at = GETDATE()
+                        WHERE stack_member_id = ?
+                    """, (role, priority, hardware_model, serial_number, mac_address, 
+                          software_version, state, row[0]))
+                else:
+                    # Insert new stack member
+                    self.logger.info(f"Inserting new stack member {switch_number}: model={hardware_model}, serial={serial_number}")
+                    cursor.execute("""
+                        INSERT INTO device_stack_members
+                        (device_id, switch_number, role, priority, hardware_model, serial_number,
+                         mac_address, software_version, state)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (device_id, switch_number, role, priority, hardware_model, serial_number,
+                          mac_address, software_version, state))
+
+                member_count += 1
+
+            self.connection.commit()
+            cursor.close()
+            return member_count
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error upserting stack members: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return 0
+
+    def process_device_discovery(self, device_info: Dict[str, Any]) -> tuple:
         """
         Process complete device discovery and update database
 
@@ -873,16 +1105,20 @@ class DatabaseManager:
             device_info: Complete device information dictionary
 
         Returns:
-            True if successful, False otherwise
+            Tuple of (success, is_new_device) where:
+            - success: True if successful, False otherwise
+            - is_new_device: True if this was a newly discovered device, False if updated
         """
         if not self.enabled or not self.is_connected():
-            return False
+            return (False, False)
 
         try:
             # Upsert device
-            device_id = self.upsert_device(device_info)
-            if not device_id:
-                return False
+            result = self.upsert_device(device_info)
+            if not result:
+                return (False, False)
+
+            device_id, is_new_device = result
 
             # Upsert software version
             software_version = device_info.get('software_version', '')
@@ -942,6 +1178,17 @@ class DatabaseManager:
                 if vlan_number and vlan_name:
                     self.upsert_device_vlan(device_id, vlan_number, vlan_name, port_count)
 
+            # Upsert stack members (if available)
+            stack_members = device_info.get('stack_members', [])
+            if stack_members:
+                try:
+                    member_count = self.upsert_stack_members(device_id, stack_members)
+                    if member_count > 0:
+                        self.logger.info(f"Stored {member_count} stack members for device {device_id}")
+                except Exception as e:
+                    # Log error but continue - don't fail entire discovery
+                    self.logger.error(f"Error storing stack members for device {device_id}: {e}")
+
             # Upsert neighbors (if available)
             neighbors = device_info.get('neighbors', [])
             if neighbors:
@@ -953,11 +1200,11 @@ class DatabaseManager:
                     # Log error but continue - don't fail entire discovery
                     self.logger.error(f"Error storing neighbors for device {device_id}: {e}")
 
-            return True
+            return (True, is_new_device)
 
         except Exception as e:
             self.logger.error(f"Error processing device discovery: {e}")
-            return False
+            return (False, False)
 
     def resolve_hostname_to_device_id(self, hostname: str, create_if_missing: bool = False,
                                       capabilities: List[str] = None, platform: str = None) -> Optional[int]:
@@ -1031,6 +1278,130 @@ class DatabaseManager:
 
         except pyodbc.Error as e:
             self.logger.error(f"Error resolving hostname '{hostname}': {e}")
+            return None
+    def get_device_platform(self, host: str) -> Optional[str]:
+        """
+        Get platform for a device by hostname or IP address
+
+        Args:
+            host: Device hostname or IP address
+
+        Returns:
+            Platform string or None if not found
+        """
+        if not self.enabled or not self.is_connected():
+            return None
+
+        if not host:
+            return None
+
+        try:
+            cursor = self.connection.cursor()
+
+            # Strip domain suffix from FQDN if present
+            short_hostname = host.split('.')[0] if '.' in host else host
+
+            # Try by device_name first
+            cursor.execute("""
+                SELECT TOP 1 platform
+                FROM devices
+                WHERE device_name = ?
+                ORDER BY last_seen DESC
+            """, (short_hostname,))
+
+            row = cursor.fetchone()
+
+            if row:
+                platform = row[0]
+                cursor.close()
+                self.logger.debug(f"Found platform '{platform}' for host '{host}'")
+                return platform
+
+            # Try by IP address in device_interfaces table
+            cursor.execute("""
+                SELECT TOP 1 d.platform
+                FROM devices d
+                INNER JOIN device_interfaces di ON d.device_id = di.device_id
+                WHERE di.ip_address = ?
+                ORDER BY d.last_seen DESC
+            """, (host,))
+
+            row = cursor.fetchone()
+            cursor.close()
+
+            if row:
+                platform = row[0]
+                self.logger.debug(f"Found platform '{platform}' for IP '{host}'")
+                return platform
+
+            self.logger.debug(f"No platform found for host '{host}'")
+            return None
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error getting platform for host '{host}': {e}")
+            return None
+
+
+    def get_device_platform(self, host: str) -> Optional[str]:
+        """
+        Get platform for a device by hostname or IP address
+
+        Args:
+            host: Device hostname or IP address
+
+        Returns:
+            Platform string or None if not found
+        """
+        if not self.enabled or not self.is_connected():
+            return None
+
+        if not host:
+            return None
+
+        try:
+            cursor = self.connection.cursor()
+
+            # Strip domain suffix from FQDN if present
+            short_hostname = host.split('.')[0] if '.' in host else host
+
+            # Try by device_name first
+            cursor.execute("""
+                SELECT TOP 1 platform
+                FROM devices
+                WHERE device_name = ?
+                ORDER BY last_seen DESC
+            """, (short_hostname,))
+
+            row = cursor.fetchone()
+
+            if row:
+                platform = row[0]
+                cursor.close()
+                self.logger.debug(f"Found platform '{platform}' for host '{host}'")
+                return platform
+
+            # Try by IP address in device_interfaces table
+            cursor.execute("""
+                SELECT TOP 1 d.platform
+                FROM devices d
+                INNER JOIN device_interfaces di ON d.device_id = di.device_id
+                WHERE di.ip_address = ?
+                ORDER BY d.last_seen DESC
+            """, (host,))
+
+            row = cursor.fetchone()
+            cursor.close()
+
+            if row:
+                platform = row[0]
+                self.logger.debug(f"Found platform '{platform}' for IP '{host}'")
+                return platform
+
+            self.logger.debug(f"No platform found for host '{host}'")
+            return None
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error getting platform for host '{host}': {e}")
             return None
 
     def check_reverse_connection(self, source_id: int, source_if: str,
@@ -1313,6 +1684,98 @@ class DatabaseManager:
         except pyodbc.Error as e:
             self.logger.error(f"Error querying device neighbors: {e}")
             return []
+    def get_device_info_by_host(self, host: str) -> Optional[Dict[str, Any]]:
+        """
+        Get complete device information by hostname or IP address.
+        Used to populate Excel reports with database info for filtered/skipped devices.
+
+        Args:
+            host: Device hostname or IP address
+
+        Returns:
+            Dictionary with device information or None if not found
+        """
+        if not self.enabled or not self.is_connected():
+            return None
+
+        if not host:
+            return None
+
+        try:
+            cursor = self.connection.cursor()
+
+            # Strip domain suffix from FQDN if present
+            short_hostname = host.split('.')[0] if '.' in host else host
+
+            # Try by device_name first
+            cursor.execute("""
+                SELECT TOP 1
+                    d.device_id,
+                    d.device_name,
+                    d.serial_number,
+                    d.platform,
+                    d.hardware_model,
+                    d.capabilities,
+                    d.status,
+                    d.last_seen,
+                    dv.software_version,
+                    di.ip_address
+                FROM devices d
+                LEFT JOIN device_versions dv ON d.device_id = dv.device_id
+                LEFT JOIN device_interfaces di ON d.device_id = di.device_id
+                WHERE d.device_name = ?
+                ORDER BY d.last_seen DESC, dv.last_seen DESC, di.last_seen DESC
+            """, (short_hostname,))
+
+            row = cursor.fetchone()
+
+            if not row:
+                # Try by IP address in device_interfaces table
+                cursor.execute("""
+                    SELECT TOP 1
+                        d.device_id,
+                        d.device_name,
+                        d.serial_number,
+                        d.platform,
+                        d.hardware_model,
+                        d.capabilities,
+                        d.status,
+                        d.last_seen,
+                        dv.software_version,
+                        di.ip_address
+                    FROM devices d
+                    LEFT JOIN device_versions dv ON d.device_id = dv.device_id
+                    INNER JOIN device_interfaces di ON d.device_id = di.device_id
+                    WHERE di.ip_address = ?
+                    ORDER BY d.last_seen DESC, dv.last_seen DESC
+                """, (host,))
+
+                row = cursor.fetchone()
+
+            cursor.close()
+
+            if row:
+                device_info = {
+                    'device_id': row[0],
+                    'hostname': row[1],
+                    'serial_number': row[2] if row[2] != 'unknown' else '',
+                    'platform': row[3] or '',
+                    'hardware_model': row[4] or '',
+                    'capabilities': row[5].split(',') if row[5] else [],
+                    'status': row[6] or '',
+                    'last_seen': row[7],
+                    'software_version': row[8] or '',
+                    'primary_ip': row[9] or ''
+                }
+                self.logger.debug(f"Found database info for host '{host}': {device_info['hostname']}")
+                return device_info
+
+            self.logger.debug(f"No database info found for host '{host}'")
+            return None
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error getting device info for host '{host}': {e}")
+            return None
 
     def get_neighbors_by_protocol(self, protocol: str) -> List[Dict[str, Any]]:
         """
@@ -1477,6 +1940,9 @@ class DatabaseManager:
 
         Args:
             days: Number of days - return devices not seen in this many days
+                  0 = all devices (rewalk everything)
+                  10 = devices not walked in last 10 days
+                  9999 = only very old devices (essentially nothing if walked recently)
 
         Returns:
             List of device dictionaries with device_name, ip_address, and last_seen
@@ -1487,33 +1953,63 @@ class DatabaseManager:
         try:
             cursor = self.connection.cursor()
 
-            cursor.execute("""
-                SELECT
-                    d.device_name,
-                    d.last_seen,
-                    d.platform,
-                    d.hardware_model,
-                    COALESCE(
-                        (SELECT TOP 1 ip_address
-                         FROM device_interfaces
-                         WHERE device_id = d.device_id
-                         ORDER BY
-                            CASE
-                                WHEN interface_name LIKE '%Management%' THEN 1
-                                WHEN interface_name LIKE '%Loopback%' THEN 2
-                                WHEN interface_name LIKE '%Vlan%' THEN 3
-                                ELSE 4
-                            END,
-                            interface_name
-                        ),
-                        ''
-                    ) AS ip_address
-                FROM devices d
-                WHERE d.status = 'active'
-                  AND d.hardware_model != 'Unwalked Neighbor'
-                  AND d.last_seen < DATEADD(day, -?, GETDATE())
-                ORDER BY d.last_seen ASC
-            """, (days,))
+            # Special case: days=0 means get ALL devices (no date filter)
+            if days == 0:
+                cursor.execute("""
+                    SELECT
+                        d.device_name,
+                        d.last_seen,
+                        d.platform,
+                        d.hardware_model,
+                        COALESCE(
+                            (SELECT TOP 1 ip_address
+                             FROM device_interfaces
+                             WHERE device_id = d.device_id
+                             ORDER BY
+                                CASE
+                                    WHEN interface_name LIKE '%Management%' THEN 1
+                                    WHEN interface_name LIKE '%Loopback%' THEN 2
+                                    WHEN interface_name LIKE '%Vlan%' THEN 3
+                                    ELSE 4
+                                END,
+                                interface_name
+                            ),
+                            ''
+                        ) AS ip_address
+                    FROM devices d
+                    WHERE d.status = 'active'
+                      AND d.hardware_model != 'Unwalked Neighbor'
+                    ORDER BY d.last_seen ASC
+                """)
+            else:
+                # Normal case: get devices older than X days
+                cursor.execute("""
+                    SELECT
+                        d.device_name,
+                        d.last_seen,
+                        d.platform,
+                        d.hardware_model,
+                        COALESCE(
+                            (SELECT TOP 1 ip_address
+                             FROM device_interfaces
+                             WHERE device_id = d.device_id
+                             ORDER BY
+                                CASE
+                                    WHEN interface_name LIKE '%Management%' THEN 1
+                                    WHEN interface_name LIKE '%Loopback%' THEN 2
+                                    WHEN interface_name LIKE '%Vlan%' THEN 3
+                                    ELSE 4
+                                END,
+                                interface_name
+                            ),
+                            ''
+                        ) AS ip_address
+                    FROM devices d
+                    WHERE d.status = 'active'
+                      AND d.hardware_model != 'Unwalked Neighbor'
+                      AND d.last_seen < DATEADD(day, -?, GETDATE())
+                    ORDER BY d.last_seen ASC
+                """, (days,))
 
             devices = []
             for row in cursor.fetchall():
@@ -1526,7 +2022,10 @@ class DatabaseManager:
                 })
 
             cursor.close()
-            self.logger.info(f"Found {len(devices)} stale devices (not walked in {days} days)")
+            if days == 0:
+                self.logger.info(f"Found {len(devices)} devices (all active devices)")
+            else:
+                self.logger.info(f"Found {len(devices)} stale devices (not walked in {days} days)")
             return devices
 
         except pyodbc.Error as e:
@@ -1597,28 +2096,28 @@ class DatabaseManager:
     def get_primary_ip_by_hostname(self, hostname: str) -> Optional[str]:
         """
         Query database for a device's primary IP address by hostname.
-        
-        The primary IP is stored in the device_interfaces table with 
+
+        The primary IP is stored in the device_interfaces table with
         interface_name = 'Primary Management' and interface_type = 'management'.
-        
+
         Args:
             hostname: Device hostname to look up
-            
+
         Returns:
             Primary IP address if found, None otherwise
-            
+
         Note:
             This method never raises exceptions - returns None on any error
         """
         if not self.enabled or not self.is_connected():
             return None
-            
+
         if not hostname:
             return None
-        
+
         try:
             cursor = self.connection.cursor()
-            
+
             # Query for primary IP by joining devices and device_interfaces tables
             # Prioritize 'Primary Management' interface, then any management interface
             cursor.execute("""
@@ -1639,10 +2138,10 @@ class DatabaseManager:
                     END,
                     di.interface_name
             """, (hostname,))
-            
+
             row = cursor.fetchone()
             cursor.close()
-            
+
             if row and row[0]:
                 ip_address = row[0]
                 self.logger.debug(f"Found primary IP {ip_address} for hostname '{hostname}'")
@@ -1650,10 +2149,162 @@ class DatabaseManager:
             else:
                 self.logger.debug(f"No primary IP found for hostname '{hostname}'")
                 return None
-                
+
         except pyodbc.Error as e:
             self.logger.error(f"Database error looking up IP for hostname '{hostname}': {e}")
             return None
         except Exception as e:
             self.logger.error(f"Unexpected error looking up IP for hostname '{hostname}': {e}")
             return None
+
+    def get_connection_failures(self, device_name: str) -> int:
+        """
+        Get connection failure count for a device
+
+        Args:
+            device_name: Device hostname
+
+        Returns:
+            Connection failure count, or 0 if device not found or database disabled
+        """
+        if not self.enabled or not self.is_connected():
+            return 0
+
+        if not device_name:
+            return 0
+
+        try:
+            cursor = self.connection.cursor()
+
+            # Strip domain suffix from FQDN if present
+            short_hostname = device_name.split('.')[0] if '.' in device_name else device_name
+
+            cursor.execute("""
+                SELECT TOP 1 connection_failures
+                FROM devices
+                WHERE device_name = ?
+                ORDER BY last_seen DESC
+            """, (short_hostname,))
+
+            row = cursor.fetchone()
+            cursor.close()
+
+            if row:
+                failures = row[0] or 0
+                self.logger.debug(f"Device '{device_name}' has {failures} connection failures")
+                return failures
+            else:
+                self.logger.debug(f"Device '{device_name}' not found in database")
+                return 0
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error getting connection failures for '{device_name}': {e}")
+            return 0
+
+    def increment_connection_failures(self, device_name: str) -> bool:
+        """
+        Increment connection failure count for a device
+
+        Args:
+            device_name: Device hostname
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.enabled or not self.is_connected():
+            return False
+
+        if not device_name:
+            return False
+
+        try:
+            cursor = self.connection.cursor()
+
+            # Strip domain suffix from FQDN if present
+            short_hostname = device_name.split('.')[0] if '.' in device_name else device_name
+
+            # Update connection_failures for the device
+            cursor.execute("""
+                UPDATE devices
+                SET connection_failures = connection_failures + 1,
+                    updated_at = GETDATE()
+                WHERE device_name = ?
+            """, (short_hostname,))
+
+            rows_affected = cursor.rowcount
+
+            if rows_affected > 0:
+                # Get the new failure count for logging
+                cursor.execute("""
+                    SELECT TOP 1 connection_failures
+                    FROM devices
+                    WHERE device_name = ?
+                    ORDER BY last_seen DESC
+                """, (short_hostname,))
+
+                row = cursor.fetchone()
+                new_count = row[0] if row else 0
+
+                self.connection.commit()
+                cursor.close()
+
+                self.logger.info(f"Incremented connection failures for '{device_name}' to {new_count}")
+                return True
+            else:
+                self.logger.warning(f"Device '{device_name}' not found in database - cannot increment failures")
+                cursor.close()
+                return False
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error incrementing connection failures for '{device_name}': {e}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+
+    def reset_connection_failures(self, device_name: str) -> bool:
+        """
+        Reset connection failure count to 0 for a device
+
+        Args:
+            device_name: Device hostname
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.enabled or not self.is_connected():
+            return False
+
+        if not device_name:
+            return False
+
+        try:
+            cursor = self.connection.cursor()
+
+            # Strip domain suffix from FQDN if present
+            short_hostname = device_name.split('.')[0] if '.' in device_name else device_name
+
+            # Reset connection_failures to 0
+            cursor.execute("""
+                UPDATE devices
+                SET connection_failures = 0,
+                    updated_at = GETDATE()
+                WHERE device_name = ?
+            """, (short_hostname,))
+
+            rows_affected = cursor.rowcount
+
+            self.connection.commit()
+            cursor.close()
+
+            if rows_affected > 0:
+                self.logger.info(f"Reset connection failures for '{device_name}' to 0")
+                return True
+            else:
+                self.logger.debug(f"Device '{device_name}' not found in database - no reset needed")
+                return False
+
+        except pyodbc.Error as e:
+            self.logger.error(f"Error resetting connection failures for '{device_name}': {e}")
+            if self.connection:
+                self.connection.rollback()
+            return False

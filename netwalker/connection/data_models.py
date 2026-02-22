@@ -56,12 +56,18 @@ class DeviceInfo:
     vlans: List['VLANInfo'] = None
     vlan_collection_status: str = "not_attempted"  # not_attempted, success, failed, skipped
     vlan_collection_error: Optional[str] = None
+    stack_members: List['StackMemberInfo'] = None
+    is_stack: bool = False
+    is_physical_device: Optional[bool] = None  # True for physical, False for cloud/virtual, None if unknown
+    ha_role: Optional[str] = None  # For PAN-OS: Active, Passive, or None if HA not enabled
     
     def __post_init__(self):
         if self.neighbors is None:
             self.neighbors = []
         if self.vlans is None:
             self.vlans = []
+        if self.stack_members is None:
+            self.stack_members = []
 
 
 @dataclass
@@ -97,10 +103,20 @@ class VLANCollectionConfig:
     max_retries: int = 2
     include_inactive_vlans: bool = True
     platforms_to_skip: List[str] = None
-    
-    def __post_init__(self):
-        if self.platforms_to_skip is None:
-            self.platforms_to_skip = []
+
+
+@dataclass
+class StackMemberInfo:
+    """Information about a switch stack member"""
+    switch_number: int
+    role: Optional[str]  # Master, Member, Standby
+    priority: Optional[int]
+    hardware_model: str
+    serial_number: str
+    mac_address: Optional[str]
+    software_version: Optional[str]
+    state: Optional[str]  # Ready, Provisioned, etc.
+    uptime: Optional[str] = None  # Uptime for this specific stack member
 
 
 @dataclass

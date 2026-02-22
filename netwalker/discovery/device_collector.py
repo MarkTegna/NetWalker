@@ -11,19 +11,23 @@ from scrapli import Scrapli
 from netwalker.connection.data_models import DeviceInfo, NeighborInfo
 from .protocol_parser import ProtocolParser
 from netwalker.vlan.vlan_collector import VLANCollector
+from .stack_collector import StackCollector
 
 
 class DeviceCollector:
     """Collects comprehensive device information during discovery"""
-    
+
     def __init__(self, config: Dict[str, Any] = None):
         self.logger = logging.getLogger(__name__)
         self.protocol_parser = ProtocolParser()
         self.config = config or {}
-        
+
         # Initialize VLAN collector if configuration is provided
         self.vlan_collector = VLANCollector(self.config) if config else None
-        
+
+        # Initialize stack collector
+        self.stack_collector = StackCollector()
+
         # Regex patterns for parsing device information
         self.hostname_pattern = re.compile(r'^(\S+)\s+uptime is', re.MULTILINE | re.IGNORECASE)
         self.version_pattern = re.compile(r'Version\s+([^\s,]+)', re.IGNORECASE)
@@ -31,33 +35,48 @@ class DeviceCollector:
         # Updated model pattern to prioritize Model Number field over platform line
         self.model_pattern = re.compile(r'Model [Nn]umber\s*:\s*([\w-]+)', re.IGNORECASE)
         self.uptime_pattern = re.compile(r'uptime is\s+(.+)', re.IGNORECASE)
-        
-    def collect_device_information(self, connection: Any, host: str, 
-                                 connection_method: str, discovery_depth: int = 0, 
+
+    def collect_device_information(self, connection: Any, host: str,
+                                 connection_method: str, discovery_depth: int = 0,
                                  is_seed: bool = False) -> Optional[DeviceInfo]:
         """
         Collect comprehensive device information
-        
+
         Args:
             connection: Active scrapli connection
             host: Device hostname or IP
             connection_method: SSH or Telnet
             discovery_depth: Current discovery depth level
             is_seed: Whether this is a seed device
-            
+
         Returns:
             DeviceInfo object or None if collection failed
         """
         try:
             self.logger.info(f"Collecting device information from {host}")
-            
-            # Get show version output
-            version_output = self._execute_command(connection, "show version")
+
+            # Detect if this is a PAN-OS device from connection type
+            is_panos = False
+            if hasattr(connection, 'device_type'):
+                is_panos = connection.device_type == 'paloalto_panos'
+                if is_panos:
+                    self.logger.info(f"PAN-OS device detected from connection device_type: {host}")
+
+            # Get version/system info output based on platform
+            if is_panos:
+                self.logger.info(f"Using PAN-OS commands for {host}")
+                # PAN-OS "show system info" can have long output, use 60 second timeout
+                version_output = self._execute_command(connection, "show system info", timeout=60)
+                # Add a marker to help platform detection
+                version_output = "PAN-OS\n" + version_output if version_output else "PAN-OS\n"
+            else:
+                version_output = self._execute_command(connection, "show version")
+
             if not version_output:
-                return self._create_failed_device_info(host, connection_method, 
-                                                     discovery_depth, is_seed, 
+                return self._create_failed_device_info(host, connection_method,
+                                                     discovery_depth, is_seed,
                                                      "Failed to get version information")
-            
+
             # Extract basic device information
             hostname = self._extract_hostname(version_output, host)
             primary_ip = self._extract_primary_ip(connection, host)
@@ -67,15 +86,26 @@ class DeviceCollector:
             hardware_model = self._extract_hardware_model(version_output)
             uptime = self._extract_uptime(version_output)
             
-            # Get VTP information
-            vtp_version = self._get_vtp_version(connection)
+            # Extract physical device status for PAN-OS (based on cloud-mode)
+            is_physical_device = self._extract_is_physical_device(version_output, platform)
             
+            # Extract HA role for PAN-OS firewalls
+            ha_role = None
+            if platform == "PAN-OS":
+                ha_role = self._extract_panos_ha_role(connection)
+
+            # Get VTP information (skip for PAN-OS)
+            if platform != "PAN-OS":
+                vtp_version = self._get_vtp_version(connection)
+            else:
+                vtp_version = None
+
             # Determine capabilities
             capabilities = self._determine_capabilities(version_output, platform)
-            
+
             # Collect neighbor information
             neighbors = self._collect_neighbors(connection, platform)
-            
+
             device_info = DeviceInfo(
                 hostname=hostname,
                 primary_ip=primary_ip,
@@ -92,9 +122,39 @@ class DeviceCollector:
                 connection_method=connection_method,
                 connection_status="success",
                 error_details=None,
-                neighbors=neighbors
+                neighbors=neighbors,
+                is_physical_device=is_physical_device,
+                ha_role=ha_role
             )
-            
+
+            # Collect stack member information
+            try:
+                self.logger.debug(f"Starting stack member collection for device {hostname}")
+                stack_members = self.stack_collector.collect_stack_members(connection, platform)
+
+                if stack_members:
+                    # Enrich with detailed information (serial numbers, models)
+                    stack_members = self.stack_collector.enrich_stack_members_with_detail(
+                        connection, platform, stack_members
+                    )
+
+                    # Set software version from parent device for all stack members
+                    # All switches in a stack run the same IOS version
+                    for member in stack_members:
+                        member.software_version = software_version
+
+                    device_info.stack_members = stack_members
+                    device_info.is_stack = True
+                    self.logger.info(f"Stack collection completed for {hostname}: {len(stack_members)} members found")
+                else:
+                    device_info.is_stack = False
+                    self.logger.debug(f"Device {hostname} is not a stack")
+
+            except Exception as e:
+                error_msg = f"Stack collection failed: {str(e)}"
+                self.logger.warning(f"Stack collection failed for {hostname}: {error_msg}")
+                device_info.is_stack = False
+
             # Collect VLAN information if VLAN collector is available and enabled
             if self.vlan_collector and self._should_collect_vlans():
                 try:
@@ -114,23 +174,24 @@ class DeviceCollector:
                     self.logger.debug(f"VLAN collector not initialized for {hostname}")
                 elif not self._should_collect_vlans():
                     self.logger.debug(f"VLAN collection disabled for {hostname}")
-            
+
             self.logger.info(f"Successfully collected information for {hostname}")
             return device_info
-            
+
         except Exception as e:
             error_msg = f"Error collecting device information: {str(e)}"
             self.logger.error(error_msg)
-            return self._create_failed_device_info(host, connection_method, 
+            return self._create_failed_device_info(host, connection_method,
                                                  discovery_depth, is_seed, error_msg)
-    
-    def _execute_command(self, connection: Any, command: str) -> Optional[str]:
+
+
+    def _execute_command(self, connection: Any, command: str, timeout: int = 30) -> Optional[str]:
         """Execute command and return output (supports both netmiko and scrapli)"""
         try:
             # Determine connection type and execute accordingly
             if hasattr(connection, 'send_command') and hasattr(connection, 'device_type'):
                 # Netmiko connection - returns string directly
-                response = connection.send_command(command, read_timeout=30)
+                response = connection.send_command(command, read_timeout=timeout)
                 return response
             elif hasattr(connection, 'send_command') and hasattr(connection, 'transport'):
                 # Scrapli connection - returns response object with .result attribute
@@ -154,18 +215,25 @@ class DeviceCollector:
         except Exception as e:
             self.logger.error(f"Command execution failed for '{command}': {str(e)}")
             return None
-    
+
     def _extract_hostname(self, version_output: str, fallback_host: str) -> str:
-        """Extract hostname from version output with enhanced NEXUS support"""
+        """Extract hostname from version output with enhanced NEXUS and PAN-OS support"""
         # Try multiple patterns for different platforms
         hostname = None
-        
+
+        # Pattern 0: PAN-OS hostname format (hostname: value)
+        panos_hostname_match = re.search(r'^hostname:\s*(\S+)', version_output, re.MULTILINE | re.IGNORECASE)
+        if panos_hostname_match:
+            hostname = panos_hostname_match.group(1)
+            self.logger.debug(f"Found hostname using PAN-OS pattern: {hostname}")
+
         # Pattern 1: Look for device name in NX-OS format (Device name: hostname)
-        nxos_hostname_match = re.search(r'Device name:\s*(\S+)', version_output, re.IGNORECASE)
-        if nxos_hostname_match:
-            hostname = nxos_hostname_match.group(1)
-            self.logger.debug(f"Found hostname using NX-OS Device name pattern: {hostname}")
-        
+        if not hostname:
+            nxos_hostname_match = re.search(r'Device name:\s*(\S+)', version_output, re.IGNORECASE)
+            if nxos_hostname_match:
+                hostname = nxos_hostname_match.group(1)
+                self.logger.debug(f"Found hostname using NX-OS Device name pattern: {hostname}")
+
         # Pattern 2: Look for NEXUS hostname in system information
         if not hostname:
             nexus_system_match = re.search(r'cisco\s+Nexus\s+\d+.*?(\S+)\s+uptime', version_output, re.IGNORECASE | re.DOTALL)
@@ -175,7 +243,7 @@ class DeviceCollector:
                 if not re.match(r'^(N\d+K?|Nexus|cisco|system|kernel)$', potential_hostname, re.IGNORECASE):
                     hostname = potential_hostname
                     self.logger.debug(f"Found hostname using NEXUS system pattern: {hostname}")
-        
+
         # Pattern 3: Look for hostname in prompt format (hostname# or hostname>)
         if not hostname:
             prompt_match = re.search(r'^(\S+)[#>]\s*$', version_output, re.MULTILINE)
@@ -185,7 +253,7 @@ class DeviceCollector:
                 if potential_hostname.lower() not in ['switch', 'router', 'nexus', 'cisco']:
                     hostname = potential_hostname
                     self.logger.debug(f"Found hostname using prompt pattern: {hostname}")
-        
+
         # Pattern 4: Enhanced uptime pattern but exclude system words
         if not hostname:
             hostname_match = self.hostname_pattern.search(version_output)
@@ -198,7 +266,7 @@ class DeviceCollector:
                     self.logger.debug(f"Found hostname using uptime pattern: {hostname}")
                 else:
                     self.logger.debug(f"Rejected system word as hostname: {potential_hostname}")
-        
+
         # Pattern 5: Look for hostname in IOS format (hostname uptime is...)
         if not hostname:
             ios_hostname_match = re.search(r'^([A-Za-z][A-Za-z0-9_-]*)\s+uptime is', version_output, re.MULTILINE | re.IGNORECASE)
@@ -208,7 +276,7 @@ class DeviceCollector:
                 if len(potential_hostname) > 2 and not potential_hostname.lower().startswith('cisco'):
                     hostname = potential_hostname
                     self.logger.debug(f"Found hostname using IOS pattern: {hostname}")
-        
+
         # Pattern 6: Look for NEXUS-specific hostname in version string
         if not hostname:
             nexus_version_match = re.search(r'(\S+)\s+\(.*?\)\s+processor.*?uptime', version_output, re.IGNORECASE | re.DOTALL)
@@ -218,26 +286,26 @@ class DeviceCollector:
                 if re.match(r'^[A-Za-z][A-Za-z0-9_-]*$', potential_hostname) and len(potential_hostname) > 2:
                     hostname = potential_hostname
                     self.logger.debug(f"Found hostname using NEXUS version pattern: {hostname}")
-        
+
         # If no hostname found, use fallback
         if not hostname:
             hostname = fallback_host
             self.logger.debug(f"Using fallback hostname: {hostname}")
-        
+
         # Clean up the hostname
         # Remove serial numbers in parentheses (e.g., "DEVICE(FOX123)" -> "DEVICE")
         hostname = re.sub(r'\([^)]*\)', '', hostname)
-        
+
         # Remove any trailing whitespace or special characters
         hostname = re.sub(r'[^\w-]', '', hostname)
-        
+
         # Ensure hostname is not longer than 36 characters
         if len(hostname) > 36:
             hostname = hostname[:36]
-            
+
         self.logger.info(f"Final extracted hostname: '{hostname}' from fallback: '{fallback_host}'")
         return hostname
-    
+
     def _extract_primary_ip(self, connection: Any, host: str) -> str:
         """
         Extract primary IP address using multiple methods:
@@ -248,7 +316,7 @@ class DeviceCollector:
         """
         import ipaddress
         import socket
-        
+
         def is_valid_ip(ip_str: str) -> bool:
             """Check if string is a valid IP address"""
             try:
@@ -256,11 +324,11 @@ class DeviceCollector:
                 return True
             except (ipaddress.AddressValueError, ValueError):
                 return False
-        
+
         # Method 1: If host is already an IP address, use it
         if is_valid_ip(host):
             return host
-        
+
         # Method 2: Try to get management IP from device interfaces
         try:
             interface_ip = self._get_management_ip_from_interfaces(connection)
@@ -269,7 +337,7 @@ class DeviceCollector:
                 return interface_ip
         except Exception as e:
             self.logger.debug(f"Failed to get IP from interfaces: {e}")
-        
+
         # Method 3: Try forward DNS lookup
         try:
             resolved_ip = socket.gethostbyname(host)
@@ -278,15 +346,15 @@ class DeviceCollector:
                 return resolved_ip
         except Exception as e:
             self.logger.debug(f"DNS lookup failed for {host}: {e}")
-        
+
         # Method 4: Fall back to connection host (might be hostname)
         if is_valid_ip(host):
             return host
-        
+
         # If all methods fail, return empty string
         self.logger.warning(f"Could not determine IP address for {host}")
         return ""
-    
+
     def _get_management_ip_from_interfaces(self, connection: Any) -> Optional[str]:
         """
         Try to extract management IP address from device interfaces.
@@ -302,7 +370,7 @@ class DeviceCollector:
                     line = line.strip()
                     if not line or 'Interface' in line or 'unassigned' in line.lower():
                         continue
-                    
+
                     # Look for management interface patterns
                     if any(pattern in line.lower() for pattern in ['vlan1', 'management', 'mgmt', 'loopback0']):
                         # Extract IP address from the line
@@ -316,7 +384,7 @@ class DeviceCollector:
                                     return part
                                 except:
                                     continue
-            
+
             # Try show ip route as fallback to find local interfaces
             route_output = self._execute_command(connection, "show ip route connected")
             if route_output:
@@ -337,17 +405,20 @@ class DeviceCollector:
                                     continue
                                 except:
                                     continue
-                                    
+
         except Exception as e:
             self.logger.debug(f"Error getting management IP from interfaces: {e}")
-        
+
         return None
-    
+
     def _detect_platform(self, version_output: str) -> str:
         """Detect device platform from version output"""
         version_lower = version_output.lower()
-        
-        if "nx-os" in version_lower or "nexus" in version_lower:
+
+        # Check for PAN-OS (Palo Alto) - multiple detection patterns
+        if any(pattern in version_lower for pattern in ["panos", "pan-os", "sw-version:", "palo alto", "pa-"]):
+            return "PAN-OS"
+        elif "nx-os" in version_lower or "nexus" in version_lower:
             return "NX-OS"
         elif "ios-xe" in version_lower:
             return "IOS-XE"
@@ -355,43 +426,60 @@ class DeviceCollector:
             return "IOS"
         else:
             return "Unknown"
-    
+
     def _extract_software_version(self, version_output: str) -> str:
         """Extract software version from version output with platform-specific patterns"""
-        # Pattern 1: NX-OS specific (highest priority)
+        # Pattern 0: PAN-OS specific (highest priority)
+        # Matches: "sw-version: 10.1.0"
+        panos_match = re.search(r'sw-version:\s+([^\s,]+)', version_output, re.IGNORECASE)
+        if panos_match:
+            return panos_match.group(1).strip()
+
+        # Pattern 1: NX-OS specific
         # Matches: "NXOS: version 9.3(9)"
         nxos_match = re.search(r'NXOS:\s+version\s+([^\s,]+)', version_output, re.IGNORECASE)
         if nxos_match:
             return nxos_match.group(1).strip()
-        
+
         # Pattern 2: System version (NX-OS fallback)
         # Matches: "System version: 9.3(9)"
         system_match = re.search(r'System version:\s+([^\s,]+)', version_output, re.IGNORECASE)
         if system_match:
             return system_match.group(1).strip()
-        
+
         # Pattern 3: Generic version (IOS/IOS-XE)
         # Matches: "Version 17.12.06"
         # Note: This pattern can match license text, so check NX-OS patterns first
         version_match = self.version_pattern.search(version_output)
         if version_match:
             return version_match.group(1).strip()
-        
+
         return "Unknown"
-    
+
     def _extract_serial_number(self, version_output: str) -> str:
         """Extract serial number from version output"""
+        # PAN-OS specific pattern (serial: value)
+        panos_serial_match = re.search(r'^serial:\s*(\S+)', version_output, re.MULTILINE | re.IGNORECASE)
+        if panos_serial_match:
+            return panos_serial_match.group(1)
+
+        # Generic pattern for IOS/NX-OS
         serial_match = self.serial_pattern.search(version_output)
         return serial_match.group(1) if serial_match else "Unknown"
-    
+
     def _extract_hardware_model(self, version_output: str) -> str:
         """Extract hardware model from version output with platform-specific patterns"""
+        # Pattern 0: PAN-OS model (model: value)
+        panos_model_match = re.search(r'^model:\s*(\S+)', version_output, re.MULTILINE | re.IGNORECASE)
+        if panos_model_match:
+            return panos_model_match.group(1).strip()
+
         # Pattern 1: Model Number field (all platforms, highest priority)
         # Matches: "Model Number: C9396PX"
         model_match = self.model_pattern.search(version_output)
         if model_match:
             return model_match.group(1).strip()
-        
+
         # Pattern 2: NX-OS Chassis (Nexus switches) - with Chassis keyword
         # Matches: "cisco Nexus9000 C9396PX Chassis" or "cisco Nexus 56128P Chassis" or "cisco Nexus9000 C9336C-FX2 Chassis"
         # Captures: "C9396PX" or "56128P" or "C9336C-FX2"
@@ -399,7 +487,7 @@ class DeviceCollector:
         nexus_match = re.search(r'cisco\s+Nexus\d*\s+([\w-]+)\s+Chassis', version_output, re.IGNORECASE)
         if nexus_match:
             return nexus_match.group(1).strip()
-        
+
         # Pattern 2b: NX-OS without Chassis keyword (fallback for Nexus)
         # Matches: "cisco Nexus9000 C9396PX" or "cisco Nexus 56128P"
         # Captures: "C9396PX" or "56128P"
@@ -409,28 +497,28 @@ class DeviceCollector:
             # Make sure we didn't accidentally capture "Chassis" as part of the model
             if not model.lower().endswith('chassis'):
                 return model
-        
+
         # Pattern 3: Cisco model in processor line with parentheses (Catalyst 4500X, etc.)
         # Matches: "cisco WS-C4500X-16 (MPC8572) processor"
         # Captures: "WS-C4500X-16"
         catalyst_processor_match = re.search(r'cisco\s+(WS-[\w-]+)\s+\([^)]+\)\s+processor', version_output, re.IGNORECASE)
         if catalyst_processor_match:
             return catalyst_processor_match.group(1).strip()
-        
+
         # Pattern 4: Cisco model in processor line (ISR, ASR, etc.)
         # Matches: "cisco ISR4451-X/K9 (OVLD-2RU) processor"
         # Captures: "ISR4451-X/K9"
         processor_match = re.search(r'cisco\s+([\w-]+/[\w-]+)\s+\([^)]+\)\s+processor', version_output, re.IGNORECASE)
         if processor_match:
             return processor_match.group(1).strip()
-        
+
         # Pattern 5: Cisco model in platform line (IOS switches)
         # Matches: "Cisco 2960 (revision 1.0)"
         # Captures: "2960"
         cisco_model_match = re.search(r'Cisco\s+(\d+[A-Z]*)\s+\(', version_output, re.IGNORECASE)
         if cisco_model_match:
             return cisco_model_match.group(1).strip()
-        
+
         # Pattern 6: Model in hardware description line (fallback)
         # Matches: "cisco MODELNAME "
         # Captures: "MODELNAME"
@@ -440,14 +528,82 @@ class DeviceCollector:
             # Filter out common non-model words
             if model.lower() not in ['systems', 'nexus', 'catalyst', 'ios']:
                 return model
+
+        return "Unknown"
+
+    def _extract_uptime(self, version_output: str) -> str:
+        """Extract uptime from version output (supports Cisco and PAN-OS formats)"""
+        # Try Cisco format first: "uptime is 5 weeks, 2 days, 3 hours, 45 minutes"
+        uptime_match = self.uptime_pattern.search(version_output)
+        if uptime_match:
+            return uptime_match.group(1).strip()
+        
+        # Try PAN-OS format: "uptime: 142 days, 14:26:05"
+        panos_uptime_match = re.search(r'uptime:\s+(.+)', version_output, re.IGNORECASE)
+        if panos_uptime_match:
+            return panos_uptime_match.group(1).strip()
         
         return "Unknown"
     
-    def _extract_uptime(self, version_output: str) -> str:
-        """Extract uptime from version output"""
-        uptime_match = self.uptime_pattern.search(version_output)
-        return uptime_match.group(1).strip() if uptime_match else "Unknown"
+    def _extract_is_physical_device(self, version_output: str, platform: str) -> Optional[bool]:
+        """
+        Extract physical device status from version output
+        For PAN-OS: cloud-mode: non-cloud = physical (True), cloud-mode: cloud = virtual (False)
+        For other platforms: None (unknown)
+        """
+        if platform != "PAN-OS":
+            return None
+        
+        # Look for cloud-mode field in PAN-OS output
+        cloud_mode_match = re.search(r'cloud-mode:\s+(\S+)', version_output, re.IGNORECASE)
+        if cloud_mode_match:
+            cloud_mode = cloud_mode_match.group(1).strip().lower()
+            # non-cloud = physical device (True)
+            # cloud = virtual/cloud device (False)
+            return cloud_mode == "non-cloud"
+        
+        # If cloud-mode not found, assume unknown
+        return None
     
+    def _extract_panos_ha_role(self, connection: Any) -> Optional[str]:
+        """
+        Extract PAN-OS high availability role from 'show high-availability state' command
+        
+        Returns:
+            "Active" if device is active
+            "Passive" if device is passive
+            None if HA is not enabled or cannot be determined
+        """
+        try:
+            ha_output = self._execute_command(connection, "show high-availability state", timeout=30)
+            if not ha_output:
+                self.logger.debug("No output from 'show high-availability state' command")
+                return None
+            
+            # Check if HA is not enabled
+            if "HA not enabled" in ha_output:
+                self.logger.debug("PAN-OS HA not enabled")
+                return None
+            
+            # Look for "Local Information:" section and extract state
+            # Pattern: "State: active" or "State: passive"
+            local_state_match = re.search(r'Local Information:.*?State:\s+(active|passive)', ha_output, re.IGNORECASE | re.DOTALL)
+            if local_state_match:
+                state = local_state_match.group(1).strip().lower()
+                if state == "active":
+                    self.logger.info("PAN-OS HA role: Active")
+                    return "Active"
+                elif state == "passive":
+                    self.logger.info("PAN-OS HA role: Passive")
+                    return "Passive"
+            
+            self.logger.debug("Could not determine PAN-OS HA role from output")
+            return None
+            
+        except Exception as e:
+            self.logger.warning(f"Error extracting PAN-OS HA role: {str(e)}")
+            return None
+
     def _get_vtp_version(self, connection: Any) -> Optional[str]:
         """Get VTP version information"""
         try:
@@ -459,68 +615,79 @@ class DeviceCollector:
         except:
             pass
         return None
-    
+
     def _determine_capabilities(self, version_output: str, platform: str) -> List[str]:
         """Determine device capabilities based on version output and platform"""
         capabilities = []
-        
+
         version_lower = version_output.lower()
-        
+
+        # PAN-OS devices are firewalls
+        if platform == "PAN-OS":
+            capabilities.append("Firewall")
+            capabilities.append("Router")
+            return capabilities
+
         # Basic capabilities based on platform
         if platform in ["IOS", "IOS-XE", "NX-OS"]:
             capabilities.append("Router")
-            
+
         # Check for switching capabilities
         if "switch" in version_lower or "catalyst" in version_lower:
             capabilities.append("Switch")
-            
+
         # Check for other capabilities
         if "bridge" in version_lower:
             capabilities.append("Bridge")
-            
+
         if not capabilities:
             capabilities.append("Host")
-            
+
         return capabilities
-    
+
     def _collect_neighbors(self, connection: Any, platform: str) -> List[NeighborInfo]:
         """Collect neighbor information using CDP and LLDP"""
         neighbors = []
-        
+
+        # PAN-OS firewalls don't support CDP/LLDP - skip neighbor discovery
+        if platform == "PAN-OS":
+            self.logger.debug("Skipping neighbor discovery for PAN-OS (firewalls don't support CDP/LLDP)")
+            return neighbors
+
         try:
             # Get platform-specific commands
             commands = self.protocol_parser.adapt_commands_for_platform(platform)
-            
+
             # Get CDP neighbors
             cdp_output = self._execute_command(connection, commands['cdp_neighbors'])
-            
+
             # Get LLDP neighbors
             lldp_output = self._execute_command(connection, commands['lldp_neighbors'])
-            
+
             # Parse both protocols
             if cdp_output or lldp_output:
                 neighbors = self.protocol_parser.parse_multi_protocol_output(
                     cdp_output or "", lldp_output or ""
                 )
-                
+
         except Exception as e:
             self.logger.error(f"Error collecting neighbors: {str(e)}")
-            
+
         return neighbors
-    
+
     def _should_collect_vlans(self) -> bool:
         """
         Check if VLAN collection should be performed based on configuration
-        
+
         Returns:
             True if VLAN collection is enabled, False otherwise
         """
         if not self.vlan_collector:
             return False
-        
+
         # Check configuration for VLAN collection
         vlan_config = self.config.get('vlan_collection', {})
-        
+
         # Handle both dictionary and VLANCollectionConfig object
         if hasattr(vlan_config, 'enabled'):
             # VLANCollectionConfig object
@@ -528,9 +695,9 @@ class DeviceCollector:
         else:
             # Dictionary format
             return vlan_config.get('enabled', True)
-    
-    def _create_failed_device_info(self, host: str, connection_method: str, 
-                                 discovery_depth: int, is_seed: bool, 
+
+    def _create_failed_device_info(self, host: str, connection_method: str,
+                                 discovery_depth: int, is_seed: bool,
                                  error_message: str) -> DeviceInfo:
         """Create DeviceInfo object for failed discovery"""
         return DeviceInfo(

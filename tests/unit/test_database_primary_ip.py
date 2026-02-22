@@ -32,7 +32,7 @@ class TestPrimaryIPStorage:
         db_manager.enabled = True
         
         # Mock upsert_device to return a device_id
-        db_manager.upsert_device = Mock(return_value=1)
+        db_manager.upsert_device = Mock(return_value=(1, True))
         db_manager.upsert_device_version = Mock(return_value=True)
         db_manager.upsert_device_interface = Mock(return_value=True)
         
@@ -49,10 +49,10 @@ class TestPrimaryIPStorage:
         }
         
         # Call process_device_discovery
-        result = db_manager.process_device_discovery(device_info)
+        success, is_new = db_manager.process_device_discovery(device_info)
         
         # Verify success
-        assert result is True, "process_device_discovery should return True"
+        assert success is True, "process_device_discovery should return True"
         
         # Verify upsert_device was called
         db_manager.upsert_device.assert_called_once_with(device_info)
@@ -94,7 +94,7 @@ class TestPrimaryIPStorage:
         db_manager.connection = MagicMock()
         db_manager.enabled = True
         
-        db_manager.upsert_device = Mock(return_value=1)
+        db_manager.upsert_device = Mock(return_value=(1, True))
         db_manager.upsert_device_version = Mock(return_value=True)
         db_manager.upsert_device_interface = Mock(return_value=True)
         
@@ -111,10 +111,10 @@ class TestPrimaryIPStorage:
         }
         
         # Call process_device_discovery
-        result = db_manager.process_device_discovery(device_info)
+        success, is_new = db_manager.process_device_discovery(device_info)
         
         # Verify success (should not fail due to empty primary_ip)
-        assert result is True, "process_device_discovery should return True even with empty primary_ip"
+        assert success is True, "process_device_discovery should return True even with empty primary_ip"
         
         # Verify upsert_device_interface was NOT called for primary_ip
         # (only called for regular interfaces, which is empty list)
@@ -137,7 +137,7 @@ class TestPrimaryIPStorage:
         db_manager.connection = MagicMock()
         db_manager.enabled = True
         
-        db_manager.upsert_device = Mock(return_value=1)
+        db_manager.upsert_device = Mock(return_value=(1, True))
         db_manager.upsert_device_version = Mock(return_value=True)
         db_manager.upsert_device_interface = Mock(return_value=True)
         
@@ -153,10 +153,10 @@ class TestPrimaryIPStorage:
         }
         
         # Call process_device_discovery
-        result = db_manager.process_device_discovery(device_info)
+        success, is_new = db_manager.process_device_discovery(device_info)
         
         # Verify success (should not fail due to missing primary_ip)
-        assert result is True, "process_device_discovery should return True even without primary_ip"
+        assert success is True, "process_device_discovery should return True even without primary_ip"
         
         # Verify upsert_device_interface was NOT called for primary_ip
         assert db_manager.upsert_device_interface.call_count == 0, "Should not store None primary_ip"
@@ -178,7 +178,7 @@ class TestPrimaryIPStorage:
         db_manager.connection = MagicMock()
         db_manager.enabled = True
         
-        db_manager.upsert_device = Mock(return_value=1)
+        db_manager.upsert_device = Mock(return_value=(1, True))
         db_manager.upsert_device_version = Mock(return_value=True)
         db_manager.upsert_device_interface = Mock(return_value=True)
         
@@ -208,10 +208,10 @@ class TestPrimaryIPStorage:
         }
         
         # Call process_device_discovery
-        result = db_manager.process_device_discovery(device_info)
+        success, is_new = db_manager.process_device_discovery(device_info)
         
         # Verify success
-        assert result is True, "process_device_discovery should return True"
+        assert success is True, "process_device_discovery should return True"
         
         # Verify upsert_device_interface was called 3 times (primary_ip + 2 interfaces)
         assert db_manager.upsert_device_interface.call_count == 3, "Should store primary_ip and 2 interfaces"
@@ -410,13 +410,13 @@ class TestQueryIntegration:
 
         # Mock the storage methods
         device_id = 1
-        db_manager.upsert_device = Mock(return_value=device_id)
+        db_manager.upsert_device = Mock(return_value=(device_id, True))
         db_manager.upsert_device_version = Mock(return_value=True)
         db_manager.upsert_device_interface = Mock(return_value=True)
 
         # Step 1: Store the device with primary_ip
-        result = db_manager.process_device_discovery(device_info)
-        assert result is True, "Device storage should succeed"
+        success, is_new = db_manager.process_device_discovery(device_info)
+        assert success is True, "Device storage should succeed"
 
         # Verify primary_ip was stored
         primary_ip_stored = False

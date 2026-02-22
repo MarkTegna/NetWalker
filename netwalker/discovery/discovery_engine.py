@@ -7,7 +7,7 @@ Implements breadth-first network topology discovery with depth limits and error 
 import logging
 from typing import Dict, List, Set, Optional, Tuple, Any
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 import time
 
@@ -29,6 +29,7 @@ class DiscoveryNode:
     parent_device: Optional[str] = None
     discovery_method: str = "seed"  # seed, cdp, lldp
     is_seed: bool = False
+    platform: Optional[str] = None  # Platform from CDP/LLDP discovery (e.g., "Palo Alto Networks PA-5200")
     
     def __post_init__(self):
         """Ensure hostname is limited to 36 characters"""
@@ -250,6 +251,7 @@ class DiscoveryEngine:
         # Progress tracking
         self.total_devices_discovered = 0
         self.devices_processed = 0
+        self.new_devices_discovered = 0  # Track newly discovered devices
         self.progress_enabled = config.get('enable_progress_tracking', True)
         
         # Queue progress tracking
@@ -402,7 +404,8 @@ class DiscoveryEngine:
         results = self._generate_discovery_summary(discovery_time)
         
         logger.info(f"Discovery completed in {discovery_time:.2f}s - "
-                   f"Found {results['total_devices']} devices, "
+                   f"Found {results['total_devices']} devices "
+                   f"({results['new_devices']} new), "
                    f"Timeout resets: {self.timeout_resets}")
         
         return results
@@ -451,6 +454,22 @@ class DiscoveryEngine:
             
             logger.info(f"  [NOT FILTERED] Device {device_key} passed initial filtering - proceeding with connection")
             
+            # Check connection failure threshold if database is enabled
+            connection_config = self.config.get('connection', {})
+            skip_after_failures = getattr(connection_config, 'skip_after_failures', 3) if hasattr(connection_config, 'skip_after_failures') else connection_config.get('skip_after_failures', 3)
+            
+            if self.db_manager and self.db_manager.enabled and skip_after_failures > 0:
+                failure_count = self.db_manager.get_connection_failures(node.hostname)
+                if failure_count >= skip_after_failures:
+                    logger.warning(f"  [SKIPPED] Device {device_key} has {failure_count} connection failures (threshold: {skip_after_failures})")
+                    
+                    # Add to inventory as skipped with failure reason
+                    device_info = self._create_basic_device_info(node, "skipped")
+                    device_info['skip_reason'] = f"Exceeded connection failure threshold ({failure_count} failures, limit: {skip_after_failures})"
+                    self.inventory.add_device(device_key, device_info, "skipped")
+                    logger.info(f"  [INVENTORY] Added {device_key} to inventory as SKIPPED (too many failures)")
+                    return
+            
             # Attempt connection and discovery
             logger.info(f"  [CONNECTING] Attempting connection to {device_key}")
             discovery_result = self._connect_and_discover(node)
@@ -488,6 +507,11 @@ class DiscoveryEngine:
                 
                 logger.info(f"  [PASSED FULL FILTER] Device {device_key} passed complete filtering - adding to inventory")
                 
+                # Reset connection failures on successful connection
+                if self.db_manager and self.db_manager.enabled:
+                    self.db_manager.reset_connection_failures(node.hostname)
+                    logger.debug(f"  [CONNECTION SUCCESS] Reset failure count for {device_key}")
+                
                 # Add device to inventory
                 self.inventory.add_device(
                     device_key, 
@@ -500,8 +524,12 @@ class DiscoveryEngine:
                 if self.db_manager and self.db_manager.enabled:
                     logger.info(f"  [DATABASE] Processing device {device_key} for database storage")
                     try:
-                        if self.db_manager.process_device_discovery(discovery_result.device_info):
+                        success, is_new_device = self.db_manager.process_device_discovery(discovery_result.device_info)
+                        if success:
                             logger.info(f"  [DATABASE] Successfully stored {device_key} in database")
+                            if is_new_device:
+                                self.new_devices_discovered += 1
+                                logger.info(f"  [DATABASE] New device discovered: {device_key}")
                         else:
                             logger.warning(f"  [DATABASE] Failed to store {device_key} in database")
                     except Exception as db_error:
@@ -521,20 +549,17 @@ class DiscoveryEngine:
                 logger.info(f"  [CONNECTION FAILED] Could not connect to {device_key} - {discovery_result.error_message}")
                 self.failed_devices.add(device_key)
                 
+                # Increment connection failures in database
+                if self.db_manager and self.db_manager.enabled:
+                    self.db_manager.increment_connection_failures(node.hostname)
+                    new_count = self.db_manager.get_connection_failures(node.hostname)
+                    logger.warning(f"  [CONNECTION FAILURE] Incremented failure count for {device_key} to {new_count}")
+                
                 # Add to inventory as failed
                 device_info = self._create_basic_device_info(node, "failed")
                 device_info['error_message'] = discovery_result.error_message
-                self.inventory.add_device(device_key, device_info, "failed")
+                self.inventory.add_device(device_key, device_info, "failed", discovery_result.error_message)
                 logger.info(f"  [INVENTORY] Added {device_key} to inventory as FAILED")
-                device_info = self._create_basic_device_info(node, "failed")
-                device_info['error_message'] = discovery_result.error_message
-                
-                self.inventory.add_device(
-                    device_key, 
-                    device_info, 
-                    "failed", 
-                    discovery_result.error_message
-                )
                 
                 logger.warning(f"Failed to discover {device_key}: {discovery_result.error_message}")
         
@@ -622,7 +647,13 @@ class DiscoveryEngine:
         """
         try:
             # Establish connection
-            connection, connection_result = self.connection_manager.connect_device(node.ip_address, self.credentials)
+            # Use IP address for connection (DNS may not resolve hostnames)
+            # Pass platform from CDP/LLDP for reliable PAN-OS detection
+            # Use IP address if available, otherwise fall back to hostname
+            connection_target = node.ip_address if node.ip_address else node.hostname
+            connection, connection_result = self.connection_manager.connect_device(
+                connection_target, self.credentials, self.db_manager, node.platform
+            )
             
             if connection_result.status != ConnectionStatus.SUCCESS:
                 return DiscoveryResult(
@@ -672,7 +703,11 @@ class DiscoveryEngine:
                 'neighbors': device_info.neighbors,  # Store the NeighborInfo objects directly
                 'vlans': device_info.vlans,  # Store the VLANInfo objects directly
                 'vlan_collection_status': device_info.vlan_collection_status,
-                'vlan_collection_error': device_info.vlan_collection_error
+                'vlan_collection_error': device_info.vlan_collection_error,
+                'stack_members': device_info.stack_members,  # Store the StackMemberInfo objects
+                'is_stack': device_info.is_stack,  # Stack flag
+                'is_physical_device': device_info.is_physical_device,  # Physical device flag (from cloud-mode)
+                'ha_role': device_info.ha_role  # HA role for PAN-OS (Active/Passive/None)
             }
             
             # Get neighbors from DeviceInfo object
@@ -680,14 +715,15 @@ class DiscoveryEngine:
             
             # Close connection using the same key that was used to create it
             # CRITICAL: Always close connection immediately after use to prevent leaks
+            # IMPORTANT: Use the same connection_target that was used to open the connection
             try:
-                connection_closed = self.connection_manager.close_connection(node.ip_address)
+                connection_closed = self.connection_manager.close_connection(connection_target)
                 if not connection_closed:
-                    self.logger.warning(f"Failed to close connection to {node.ip_address} - may cause connection leak")
+                    self.logger.warning(f"Failed to close connection to {node.hostname} ({connection_target}) - may cause connection leak")
                 else:
-                    self.logger.debug(f"Connection to {node.ip_address} closed successfully")
+                    self.logger.debug(f"Connection to {node.hostname} ({connection_target}) closed successfully")
             except Exception as close_error:
-                self.logger.error(f"Error closing connection to {node.ip_address}: {close_error}")
+                self.logger.error(f"Error closing connection to {node.hostname} ({connection_target}): {close_error}")
             
             return DiscoveryResult(
                 hostname=node.hostname,
@@ -733,10 +769,18 @@ class DiscoveryEngine:
                 if '.' in neighbor_hostname:
                     neighbor_hostname = neighbor_hostname.split('.')[0]
                 
-                # Skip if no IP address available
+                # If no IP address available, try DNS resolution
                 if not neighbor_ip:
-                    logger.debug(f"Skipping neighbor {neighbor_hostname} - no IP address available")
-                    continue
+                    logger.info(f"    [DNS RESOLUTION] Neighbor {neighbor_hostname} has no IP address, attempting DNS lookup")
+                    try:
+                        import socket
+                        resolved_ip = socket.gethostbyname(neighbor_hostname)
+                        neighbor_ip = resolved_ip
+                        logger.info(f"    [DNS SUCCESS] Resolved {neighbor_hostname} to {resolved_ip}")
+                    except (socket.gaierror, socket.herror, OSError) as e:
+                        logger.warning(f"    [DNS FAILED] Could not resolve {neighbor_hostname}: {e}")
+                        logger.debug(f"Skipping neighbor {neighbor_hostname} - no IP address available and DNS resolution failed")
+                        continue
                     
                 neighbor_ip = neighbor_ip.strip()
             else:
@@ -777,13 +821,14 @@ class DiscoveryEngine:
             
             logger.info(f"    [NEIGHBOR PASSED] {neighbor_hostname}:{neighbor_ip} passed filtering checks")
             
-            # Create neighbor node
+            # Create neighbor node with platform from CDP/LLDP
             neighbor_node = DiscoveryNode(
                 hostname=neighbor_hostname,
                 ip_address=neighbor_ip,
                 depth=parent_node.depth + 1,
                 parent_device=parent_node.device_key,
-                discovery_method=protocol
+                discovery_method=protocol,
+                platform=neighbor_platform  # Pass platform from CDP/LLDP for PAN-OS detection
             )
             
             logger.info(f"    [NEIGHBOR CHECK] Checking if {neighbor_node.device_key} should be queued")
@@ -944,6 +989,7 @@ class DiscoveryEngine:
         return {
             'discovery_time_seconds': discovery_time,
             'total_devices': stats['total_discovered'],
+            'new_devices': self.new_devices_discovered,
             'successful_connections': stats['successful_connections'],
             'failed_connections': stats['failed_connections'],
             'filtered_devices': stats['filtered_devices'],

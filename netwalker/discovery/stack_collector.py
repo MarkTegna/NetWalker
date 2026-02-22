@@ -179,10 +179,10 @@ class StackCollector:
                 switch_number=switch_number,
                 role=role,
                 priority=priority,
-                hardware_model="Unknown",  # Will be populated by show switch detail
-                serial_number="Unknown",   # Will be populated by show switch detail
+                hardware_model="Unknown",  # Will be populated by show inventory
+                serial_number="Unknown",   # Will be populated by show inventory
                 mac_address=mac_address,
-                software_version=hardware_version,
+                software_version=None,  # Will be set from parent device software version
                 state=state
             )
             
@@ -194,24 +194,15 @@ class StackCollector:
         """
         Collect stack information from NX-OS devices.
         
-        NX-OS uses 'show module' for modular chassis information.
+        NOTE: NX-OS devices do not support traditional stacking like IOS devices.
+        NX-OS uses modular chassis with supervisor modules and line cards, not stacks.
+        VPC (Virtual Port Channel) is used for redundancy, but that's not the same as stacking.
+        
+        Returning empty list to avoid treating line cards as stack members.
         """
-        stack_members = []
-        
-        # Execute show module command
-        output = self._execute_command(connection, "show module")
-        
-        if not output:
-            self.logger.debug("No output from 'show module' command")
-            return stack_members
-        
-        # Parse the output
-        stack_members = self._parse_nxos_module_output(output)
-        
-        if stack_members:
-            self.logger.info(f"Found {len(stack_members)} modules")
-        
-        return stack_members
+        # NX-OS doesn't have traditional stacking - return empty list
+        self.logger.debug("NX-OS devices do not support traditional stacking - skipping stack collection")
+        return []
     
     def _parse_nxos_module_output(self, output: str) -> List[StackMemberInfo]:
         """
@@ -326,20 +317,30 @@ class StackCollector:
         Uses 'show inventory' which provides hardware model and serial number
         for each switch in the stack.
         """
+        self.logger.info(f"Enriching {len(stack_members)} IOS stack members with inventory details")
         output = self._execute_command(connection, "show inventory")
         
         if not output:
-            self.logger.debug("No output from 'show inventory' command")
+            self.logger.warning("No output from 'show inventory' command - stack members will have incomplete data")
             return stack_members
+        
+        # Log raw output for debugging (first 1000 chars at INFO level)
+        self.logger.info(f"Raw 'show inventory' output (first 1000 chars): {output[:1000]}")
         
         # Parse inventory output and update stack members
         detail_map = self._parse_ios_inventory(output)
+        self.logger.info(f"Parsed inventory data for {len(detail_map)} switches: {list(detail_map.keys())}")
         
         for member in stack_members:
             if member.switch_number in detail_map:
                 details = detail_map[member.switch_number]
+                old_serial = member.serial_number
+                old_model = member.hardware_model
                 member.serial_number = details.get('serial', member.serial_number)
                 member.hardware_model = details.get('model', member.hardware_model)
+                self.logger.info(f"  Switch {member.switch_number}: Model={old_model}->{member.hardware_model}, Serial={old_serial}->{member.serial_number}")
+            else:
+                self.logger.warning(f"  Switch {member.switch_number}: No inventory data found - keeping existing values (Model={member.hardware_model}, Serial={member.serial_number})")
         
         return stack_members
     
@@ -390,25 +391,41 @@ class StackCollector:
         Parse 'show inventory' output to extract serial numbers and models for stack members.
         
         Example output:
-        NAME: "Switch 1", DESCR: "C9300-48P"
-        PID: C9300-48P         , VID: V03  , SN: FOC2432L6G4
+        NAME: "Switch 1 Chassis", DESCR: "Cisco Catalyst 9500 Series Chassis"
+        PID: C9500-48Y4C       , VID: V06  , SN: FDO281500VJ
         
-        NAME: "Switch 3", DESCR: "C9300-48T"
-        PID: C9300-48T         , VID: V02  , SN: FCW2221L0VK
+        NAME: "Switch 1 Slot 1 Supervisor", DESCR: "Cisco Catalyst 9500 Series Router"
+        PID: C9500-48Y4C       , VID: V06  , SN: FDO281500VJ
         
         Returns dict mapping switch_number to details dict.
+        Priority: Chassis > Supervisor > other components
         """
         detail_map = {}
         lines = output.split('\n')
+        
+        self.logger.info(f"Parsing inventory output with {len(lines)} lines")
+        self.logger.info(f"Looking for pattern: NAME: \"Switch X\" followed by PID/SN line")
         
         i = 0
         while i < len(lines):
             line = lines[i].strip()
             
-            # Look for "Switch X" in NAME field
-            switch_match = re.search(r'NAME:\s*"Switch\s+(\d+)"', line, re.IGNORECASE)
+            # Look for "Switch X" in NAME field (may have additional text like "Chassis", "Slot 1 Supervisor", etc.)
+            switch_match = re.search(r'NAME:\s*"Switch\s+(\d+)(?:\s+([^"]+))?"', line, re.IGNORECASE)
             if switch_match:
                 switch_number = int(switch_match.group(1))
+                component_type = switch_match.group(2).strip() if switch_match.group(2) else ""
+                
+                # Determine priority: Chassis (highest) > Supervisor > other components (lowest)
+                priority = 0
+                if 'chassis' in component_type.lower():
+                    priority = 3
+                elif 'supervisor' in component_type.lower():
+                    priority = 2
+                else:
+                    priority = 1
+                
+                self.logger.debug(f"Found Switch {switch_number} component: '{component_type}' (priority={priority})")
                 
                 # Next line should have PID and SN
                 if i + 1 < len(lines):
@@ -419,22 +436,39 @@ class StackCollector:
                     if pid_match:
                         model = pid_match.group(1).strip()
                         
-                        # Filter out network modules (models containing -NM-)
-                        if '-NM-' not in model:
+                        # Filter out network modules (models containing -NM-), power supplies, fans, disks
+                        if '-NM-' in model or 'PWR' in model or 'FAN' in model or 'SSD' in model:
+                            self.logger.debug(f"  Skipping component: {model}")
+                        else:
+                            # Only update if this is higher priority than existing entry
                             if switch_number not in detail_map:
-                                detail_map[switch_number] = {}
-                            detail_map[switch_number]['model'] = model
+                                detail_map[switch_number] = {'priority': priority}
+                            
+                            if priority >= detail_map[switch_number].get('priority', 0):
+                                detail_map[switch_number]['model'] = model
+                                detail_map[switch_number]['priority'] = priority
+                                self.logger.debug(f"  Switch {switch_number} model: {model} (priority={priority})")
                     
-                    # Extract SN (serial number)
+                    # Extract SN (serial number) - always update if priority is higher
                     sn_match = re.search(r'SN:\s*(\S+)', next_line)
                     if sn_match:
                         serial = sn_match.group(1).strip()
                         if switch_number not in detail_map:
-                            detail_map[switch_number] = {}
-                        detail_map[switch_number]['serial'] = serial
+                            detail_map[switch_number] = {'priority': priority}
+                        
+                        if priority >= detail_map[switch_number].get('priority', 0):
+                            detail_map[switch_number]['serial'] = serial
+                            detail_map[switch_number]['priority'] = priority
+                            self.logger.debug(f"  Switch {switch_number} serial: {serial} (priority={priority})")
             
             i += 1
         
+        # Remove priority field from final results
+        for switch_num in detail_map:
+            if 'priority' in detail_map[switch_num]:
+                del detail_map[switch_num]['priority']
+        
+        self.logger.info(f"Inventory parsing complete: found data for switches {list(detail_map.keys())}")
         return detail_map
     
     def _enrich_nxos_module_detail(self, connection: Any, 

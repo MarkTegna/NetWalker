@@ -110,6 +110,7 @@ class ConnectionConfig:
     ssl_cert_file: Optional[str] = None
     ssl_key_file: Optional[str] = None
     ssl_ca_bundle: Optional[str] = None
+    skip_after_failures: int = 3
 
 
 @dataclass

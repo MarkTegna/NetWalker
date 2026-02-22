@@ -127,8 +127,10 @@ def export_devices_to_excel():
             adjusted_width = min(max_length + 2, 50)
             ws.column_dimensions[column_letter].width = adjusted_width
         
-        # Save workbook
-        output_file = "export1.xlsx"
+        # Save workbook with date-coded filename
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d-%H-%M")
+        output_file = f"Device_Inventory_{timestamp}.xlsx"
         wb.save(output_file)
         
         print(f"Successfully exported {len(rows)} devices to {output_file}")

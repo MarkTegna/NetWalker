@@ -68,15 +68,15 @@ def test_property_primary_ip_storage_completeness(device_info):
     
     # Mock methods
     device_id = 42  # Fixed device_id for testing
-    db_manager.upsert_device = Mock(return_value=device_id)
+    db_manager.upsert_device = Mock(return_value=(device_id, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     db_manager.upsert_device_interface = Mock(return_value=True)
     
     # Call process_device_discovery
-    result = db_manager.process_device_discovery(device_info)
+    success, is_new = db_manager.process_device_discovery(device_info)
     
     # Verify success
-    assert result is True, "process_device_discovery should return True"
+    assert success is True, "process_device_discovery should return True"
     
     # Find the primary_ip interface call
     primary_ip_call = None
@@ -125,7 +125,7 @@ def test_property_primary_ip_storage_idempotence(device_info):
     
     # Mock methods
     device_id = 42
-    db_manager.upsert_device = Mock(return_value=device_id)
+    db_manager.upsert_device = Mock(return_value=(device_id, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     
     # Simulate actual upsert_device_interface behavior with idempotence
@@ -158,8 +158,8 @@ def test_property_primary_ip_storage_idempotence(device_info):
     result2 = db_manager.process_device_discovery(device_info)
     
     # Both should succeed
-    assert result1 is True, "First call should succeed"
-    assert result2 is True, "Second call should succeed"
+    assert success1 is True, "First call should succeed"
+    assert success2 is True, "Second call should succeed"
     
     # Verify upsert_device_interface was called twice for primary_ip
     primary_ip_calls = 0
@@ -239,14 +239,14 @@ def test_property_primary_ip_stored_before_other_interfaces(hostname, primary_ip
     db_manager.connection = MagicMock()
     db_manager.enabled = True
     
-    db_manager.upsert_device = Mock(return_value=1)
+    db_manager.upsert_device = Mock(return_value=(1, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     db_manager.upsert_device_interface = Mock(return_value=True)
     
     # Call process_device_discovery
-    result = db_manager.process_device_discovery(device_info)
+    success, is_new = db_manager.process_device_discovery(device_info)
     
-    assert result is True, "process_device_discovery should succeed"
+    assert success is True, "process_device_discovery should succeed"
     
     # Verify at least 2 interface calls were made
     assert db_manager.upsert_device_interface.call_count >= 2, "Should store primary_ip and at least one other interface"
@@ -294,14 +294,14 @@ def test_property_handles_missing_primary_ip(hostname, serial):
     db_manager.connection = MagicMock()
     db_manager.enabled = True
     
-    db_manager.upsert_device = Mock(return_value=1)
+    db_manager.upsert_device = Mock(return_value=(1, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     db_manager.upsert_device_interface = Mock(return_value=True)
     
     # Call process_device_discovery - should not raise exception
-    result = db_manager.process_device_discovery(device_info)
+    success, is_new = db_manager.process_device_discovery(device_info)
     
-    assert result is True, "Should succeed even without primary_ip"
+    assert success is True, "Should succeed even without primary_ip"
     
     # Verify no primary_ip interface was stored
     primary_ip_calls = 0
@@ -351,14 +351,14 @@ def test_property_handles_empty_or_none_primary_ip(hostname, primary_ip, serial)
     db_manager.connection = MagicMock()
     db_manager.enabled = True
 
-    db_manager.upsert_device = Mock(return_value=1)
+    db_manager.upsert_device = Mock(return_value=(1, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     db_manager.upsert_device_interface = Mock(return_value=True)
 
     # Call process_device_discovery - should not raise exception
-    result = db_manager.process_device_discovery(device_info)
+    success, is_new = db_manager.process_device_discovery(device_info)
 
-    assert result is True, "Should succeed with empty/None primary_ip"
+    assert success is True, "Should succeed with empty/None primary_ip"
 
     # Verify no primary_ip interface was stored
     assert db_manager.upsert_device_interface.call_count == 0, \
@@ -621,7 +621,7 @@ def test_property_ip_address_format_validation(hostname, primary_ip, serial):
         stored_interfaces.append(interface_info.copy())
         return True
 
-    db_manager.upsert_device = Mock(return_value=1)
+    db_manager.upsert_device = Mock(return_value=(1, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     db_manager.upsert_device_interface = Mock(side_effect=mock_upsert_interface)
 
@@ -635,10 +635,10 @@ def test_property_ip_address_format_validation(hostname, primary_ip, serial):
     db_manager.logger.warning = Mock(side_effect=mock_warning)
 
     # Call process_device_discovery
-    result = db_manager.process_device_discovery(device_info)
+    success, is_new = db_manager.process_device_discovery(device_info)
 
     # The operation should complete (not crash)
-    assert result is True, "process_device_discovery should not crash on invalid IP"
+    assert success is True, "process_device_discovery should not crash on invalid IP"
 
     # Check if invalid IP was stored
     primary_ip_stored = False
@@ -704,15 +704,15 @@ def test_property_valid_ip_addresses_are_stored(primary_ip):
     db_manager.connection = MagicMock()
     db_manager.enabled = True
 
-    db_manager.upsert_device = Mock(return_value=1)
+    db_manager.upsert_device = Mock(return_value=(1, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     db_manager.upsert_device_interface = Mock(return_value=True)
 
     # Call process_device_discovery
-    result = db_manager.process_device_discovery(device_info)
+    success, is_new = db_manager.process_device_discovery(device_info)
 
     # Should succeed
-    assert result is True, "Valid IP should be processed successfully"
+    assert success is True, "Valid IP should be processed successfully"
 
     # Verify primary_ip was stored
     primary_ip_calls = 0
@@ -806,7 +806,7 @@ def test_property_primary_ip_update_on_rediscovery(
 
     # Mock the database methods
     device_id = 42
-    db_manager.upsert_device = Mock(return_value=device_id)
+    db_manager.upsert_device = Mock(return_value=(device_id, True))
     db_manager.upsert_device_version = Mock(return_value=True)
     db_manager.upsert_device_interface = Mock(side_effect=mock_upsert_interface)
 
@@ -822,8 +822,8 @@ def test_property_primary_ip_update_on_rediscovery(
         'neighbors': []
     }
 
-    result1 = db_manager.process_device_discovery(device_info1)
-    assert result1 is True, "First discovery should succeed"
+    success1, is_new1 = db_manager.process_device_discovery(device_info1)
+    assert success1 is True, "First discovery should succeed"
 
     # Verify first primary_ip was stored
     key1 = (device_id, 'Primary Management', primary_ip1)
@@ -842,8 +842,8 @@ def test_property_primary_ip_update_on_rediscovery(
         'neighbors': []
     }
 
-    result2 = db_manager.process_device_discovery(device_info2)
-    assert result2 is True, "Second discovery should succeed"
+    success2, is_new2 = db_manager.process_device_discovery(device_info2)
+    assert success2 is True, "Second discovery should succeed"
 
     # CRITICAL PROPERTY 1: Both primary_ip records should exist
     # (new record created, old record preserved for history)

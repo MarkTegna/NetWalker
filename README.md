@@ -12,12 +12,14 @@ NetWalker is a Windows-based Python application that automatically discovers and
 - **Automated Discovery**: Breadth-first network traversal starting from seed devices
 - **Command Execution**: Execute arbitrary commands on filtered device sets
 - **Dual Protocol Support**: CDP and LLDP neighbor discovery
+- **Stack Member Detection**: Automatic detection and inventory of switch stack members
 - **Connection Flexibility**: SSH with automatic TELNET fallback for legacy devices
 - **Windows Compatible**: Proper TELNET transport for Windows systems
 - **Concurrent Processing**: Multi-threaded discovery for large networks
 
 ### Reporting & Output
 - **Excel Reports**: Comprehensive device inventory and connection details
+- **Stack Members Sheet**: Detailed inventory of individual stack members with serial numbers and models
 - **Command Results**: Export command outputs to timestamped Excel files
 - **Professional Formatting**: Auto-sized columns, filters, and headers
 - **Multiple Workbooks**: Main discovery report plus per-seed device reports
@@ -281,15 +283,56 @@ netwalker.exe execute --filter "%" --command "show ip interface brief"
 ## 📊 Supported Devices
 
 ### Tested Platforms
-- **Cisco IOS**: All versions
-- **Cisco IOS-XE**: All versions  
+- **Cisco IOS**: All versions (including StackWise stacks)
+- **Cisco IOS-XE**: All versions (including StackWise stacks)
 - **Cisco NX-OS**: All versions
+- **Cisco VSS**: Virtual Switching System (Catalyst 4500-X, 6500)
 - **Generic Devices**: Any device supporting CDP or LLDP
 
 ### Connection Methods
 - **SSH**: Primary connection method (port 22)
 - **TELNET**: Automatic fallback for legacy devices (port 23)
 - **Authentication**: Multiple credential sources (CLI, environment, interactive prompting)
+
+## 🔗 Stack Member Detection
+
+NetWalker automatically detects and inventories switch stack members, providing complete hardware details for each member in a stack.
+
+### Supported Stack Types
+- **Cisco StackWise**: Catalyst 9000, 3850, 3650 series
+- **Cisco VSS**: Catalyst 4500-X, 6500 series
+
+### Collected Information
+For each stack member, NetWalker collects:
+- **Switch Number**: Position in the stack (1, 2, 3, etc.)
+- **Role**: Active, Standby, Member, Master
+- **Priority**: Stack priority value (StackWise only)
+- **Hardware Model**: Exact model number (e.g., C9500-48Y4C)
+- **Serial Number**: Unique serial number for each member
+- **MAC Address**: Base MAC address
+- **State**: Operational state (Ready, Provisioned, etc.)
+
+### Stack Members Sheet
+Excel reports include a dedicated "Stack Members" sheet with complete inventory:
+
+| Device Name | Member Number | Serial Number | Model | Role | Priority | State |
+|-------------|---------------|---------------|-------|------|----------|-------|
+| CORE-SW-A | 1 | FDO281500VJ | C9500-48Y4C | Active | 15 | Ready |
+| CORE-SW-A | 2 | FDO281509H3 | C9500-48Y4C | Standby | 1 | Ready |
+
+### Detection Process
+1. **Stack Detection**: Identifies stack devices using "show switch" command
+2. **Member Enumeration**: Parses stack member details from command output
+3. **Hardware Enrichment**: Collects serial numbers and models from "show inventory"
+4. **Module Filtering**: Automatically filters out network modules and line cards
+5. **Database Storage**: Persists stack member data for historical tracking
+6. **Report Generation**: Includes stack members in all Excel reports
+
+### Notes
+- Network modules (models containing "-NM-") are automatically filtered out
+- Per-stack-member uptime is not available from standard Cisco IOS commands
+- Device-level uptime (from "show version") is stored in the main devices table
+- VSS detection uses "show mod" as a fallback when "show switch" is not supported
 
 ## 🛠 Configuration Reference
 

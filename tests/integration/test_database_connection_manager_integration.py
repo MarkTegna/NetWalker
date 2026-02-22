@@ -376,13 +376,13 @@ class TestDatabaseConnectionManagerIntegration:
         }
 
         # Mock storage methods
-        db_manager.upsert_device = Mock(return_value=1)
+        db_manager.upsert_device = Mock(return_value=(1, True))
         db_manager.upsert_device_version = Mock(return_value=True)
         db_manager.upsert_device_interface = Mock(return_value=True)
 
         # Store the device
-        result = db_manager.process_device_discovery(device_info)
-        assert result is True, "Device storage should succeed"
+        success, is_new = db_manager.process_device_discovery(device_info)
+        assert success is True, "Device storage should succeed"
 
         # Verify primary_ip was stored
         primary_ip_stored = False

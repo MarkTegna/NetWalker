@@ -49,3 +49,19 @@ Version management for builds:
 - Automatic build sequence: 0.4.13 → 0.4.13a → 0.4.13b → 0.4.13c (for testing/development)
 - User build: 0.4.13c → 0.4.14 (when user says "build" for final testing)
 - Default behavior: Use automatic builds unless user explicitly requests "build"
+
+Testing workflow:
+- ALWAYS build the executable for testing - user tests with the exe, not Python source
+- After making code changes: 1) Clear cache, 2) Build executable (python build_executable.py), 3) Test with exe
+- Never provide Python source for testing - always provide the built executable
+- The executable is located at: dist/netwalker.exe
+
+Logging and output standards:
+- All log files and console output must include at the top:
+  - Hostname of the computer where the program is executed
+  - Execution path (working directory)
+  - Program name and version number
+- All email notifications must include at the bottom:
+  - Hostname of the computer where the program is executed
+  - Execution path (working directory)
+  - Program name and version number

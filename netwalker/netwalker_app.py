@@ -147,6 +147,9 @@ class NetWalkerApp:
         self.config_manager = ConfigurationManager('netwalker.ini')
         parsed_config = self.config_manager.load_configuration()
         
+        # Store the full parsed config for components that need it (like ExcelReportGenerator)
+        self.parsed_config = parsed_config
+        
         # Convert parsed configuration to flat structure for backward compatibility
         self.config = {
             'reports_directory': parsed_config['output'].reports_directory,
@@ -170,12 +173,16 @@ class NetWalkerApp:
         print(f"DEBUG: Loaded IP excludes: {self.config['ip_excludes']}")
         print(f"DEBUG: Loaded platform excludes: {len(self.config['platform_excludes'])} items")
         print(f"DEBUG: Loaded capability excludes: {len(self.config['capability_excludes'])} items")
+        print(f"DEBUG: Initial max_discovery_depth from config file: {self.config['max_discovery_depth']}")
+        print(f"DEBUG: CLI args received: {self.cli_args}")
         
         # Apply CLI overrides
         if self.cli_args:
             self.config.update({k: v for k, v in self.cli_args.items() if v is not None})
+            print(f"DEBUG: After CLI overrides, max_discovery_depth: {self.config.get('max_discovery_depth', 'NOT SET')}")
         
         logger.info(f"Configuration initialized with defaults and CLI overrides")
+        logger.info(f"Final max_discovery_depth: {self.config.get('max_discovery_depth', 'NOT SET')}")
     
     def _initialize_output_management(self):
         """Initialize output directory management"""
@@ -266,9 +273,14 @@ class NetWalkerApp:
     
     def _initialize_reporting(self):
         """Initialize report generation"""
-        # Update config with output directory
+        # Create config with full parsed_config for database access
         config_with_reports = self.config.copy()
         config_with_reports['reports_directory'] = self.output_manager.get_reports_directory()
+        
+        # Add database and output sections from parsed_config for ExcelReportGenerator
+        # parsed_config['database'] is already a dict, not an object
+        config_with_reports['database'] = self.parsed_config['database']
+        config_with_reports['output'] = self.parsed_config['output']
         
         self.excel_generator = ExcelReportGenerator(config_with_reports)
         logger.info("Report generation initialized")
@@ -514,7 +526,9 @@ class NetWalkerApp:
             # Execute discovery
             self.discovery_results = self.discovery_engine.discover_topology()
             
-            logger.info(f"Discovery completed - found {self.discovery_results.get('total_devices', 0)} devices")
+            new_devices = self.discovery_results.get('new_devices', 0)
+            total_devices = self.discovery_results.get('total_devices', 0)
+            logger.info(f"Discovery completed - found {total_devices} devices ({new_devices} new)")
             return self.discovery_results
             
         except Exception as e:

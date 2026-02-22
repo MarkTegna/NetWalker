@@ -1,0 +1,3 @@
+usage: netwalker.exe [-h] [--config CONFIG] [--version]
+                     {discover,visio,execute,ipv4-prefix-inventory} ...
+netwalker.exe: error: unrecognized arguments: --config marktests\netwalker.ini

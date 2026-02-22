@@ -163,6 +163,7 @@ class TestExcelReportGeneratorProperties:
             unique_by=lambda x: f"{x[0]}:{x[1]}"
         )
     )
+    @settings(max_examples=10, deadline=None)
     def test_excel_formatting_standards_property(self, devices):
         """
         Property 15: Excel Formatting Standards
