@@ -937,6 +937,14 @@ class DiscoveryEngine:
     
     def _create_basic_device_info(self, node: DiscoveryNode, status: str) -> Dict[str, Any]:
         """Create basic device info for failed/filtered devices"""
+        # Try to get device info from database first (may have been discovered as neighbor)
+        db_info = None
+        if self.db_manager:
+            db_info = self.db_manager.get_device_info_by_host(node.hostname)
+            if not db_info and node.ip_address:
+                db_info = self.db_manager.get_device_info_by_host(node.ip_address)
+        
+        # Use database info if available, otherwise use 'unknown' as fallback
         return {
             'hostname': node.hostname,
             'ip_address': node.ip_address,
@@ -945,10 +953,10 @@ class DiscoveryEngine:
             'parent_device': node.parent_device,
             'discovery_timestamp': datetime.now().isoformat(),
             'status': status,
-            'platform': 'unknown',
-            'software_version': 'unknown',
-            'serial_number': 'unknown',
-            'hardware_model': 'unknown',
+            'platform': db_info['platform'] if db_info else 'unknown',
+            'software_version': db_info['software_version'] if db_info else 'unknown',
+            'serial_number': db_info['serial_number'] if db_info else 'unknown',
+            'hardware_model': db_info['hardware_model'] if db_info else 'unknown',
             'uptime': 'unknown',
             'connection_method': 'none'
         }
@@ -958,6 +966,14 @@ class DiscoveryEngine:
                                              platform: Optional[str] = None, 
                                              capabilities: Optional[List[str]] = None) -> Dict[str, Any]:
         """Create basic device info for filtered neighbor devices"""
+        # Try to get device info from database first (may have been discovered as neighbor)
+        db_info = None
+        if self.db_manager:
+            db_info = self.db_manager.get_device_info_by_host(hostname)
+            if not db_info and ip_address:
+                db_info = self.db_manager.get_device_info_by_host(ip_address)
+        
+        # Use database info if available, otherwise use provided/fallback values
         return {
             'hostname': hostname,
             'ip_address': ip_address,
@@ -966,11 +982,11 @@ class DiscoveryEngine:
             'parent_device': parent_device,
             'discovery_timestamp': datetime.now().isoformat(),
             'status': status,
-            'platform': platform or 'unknown',
-            'capabilities': capabilities or [],
-            'software_version': 'unknown',
-            'serial_number': 'unknown',
-            'hardware_model': 'unknown',
+            'platform': db_info['platform'] if db_info else (platform or 'unknown'),
+            'capabilities': db_info['capabilities'] if db_info else (capabilities or []),
+            'software_version': db_info['software_version'] if db_info else 'unknown',
+            'serial_number': db_info['serial_number'] if db_info else 'unknown',
+            'hardware_model': db_info['hardware_model'] if db_info else 'unknown',
             'uptime': 'unknown',
             'connection_method': 'none'
         }

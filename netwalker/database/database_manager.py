@@ -1245,6 +1245,161 @@ class DatabaseManager:
 
             if row:
                 device_id = row[0]
+                
+                # Update device information if new data is available from CDP/LLDP
+                if platform and platform != 'Unknown':
+                    # Get current device data
+                    cursor.execute("""
+                        SELECT platform, hardware_model, serial_number 
+                        FROM devices 
+                        WHERE device_id = ?
+                    """, (device_id,))
+                    current_row = cursor.fetchone()
+                    current_platform = current_row[0] if current_row else None
+                    current_model = current_row[1] if current_row else None
+                    current_serial = current_row[2] if current_row else None
+                    
+                    # Check if this is an Aruba AP - always parse and update if data has changed
+                    if 'Aruba AP' in platform or 'AOS-' in platform:
+                        from netwalker.discovery.protocol_parser import ProtocolParser
+                        parser = ProtocolParser()
+                        aruba_data = parser.parse_aruba_platform_string(platform)
+                        
+                        # Build update query for changed fields
+                        update_fields = []
+                        update_values = []
+                        
+                        # Update platform if different
+                        if aruba_data['platform'] != current_platform:
+                            update_fields.append("platform = ?")
+                            update_values.append(aruba_data['platform'])
+                        
+                        # Update model if we have new data and it's different
+                        if aruba_data['model'] and aruba_data['model'] != current_model:
+                            update_fields.append("hardware_model = ?")
+                            update_values.append(aruba_data['model'])
+                        
+                        # Update serial if we have new data and it's different
+                        if aruba_data['serial'] and aruba_data['serial'] != current_serial:
+                            update_fields.append("serial_number = ?")
+                            update_values.append(aruba_data['serial'])
+                        
+                        # Execute update if any fields changed
+                        if update_fields:
+                            update_fields.append("updated_at = GETDATE()")
+                            update_values.append(device_id)
+                            
+                            cursor.execute(f"""
+                                UPDATE devices
+                                SET {', '.join(update_fields)}
+                                WHERE device_id = ?
+                            """, tuple(update_values))
+                            self.connection.commit()
+                            self.logger.info(f"Updated Aruba device '{hostname}' (ID: {device_id}): platform={aruba_data['platform']}, model={aruba_data.get('model')}, serial={aruba_data.get('serial')}")
+                    
+                    # Check if this is a Cisco SG300/SG200/SG500 device - parse and update
+                    elif 'SG300' in platform or 'SG200' in platform or 'SG500' in platform or '|' in platform:
+                        # Check if it's actually an SG device (not Axis or other delimited format)
+                        if not platform.upper().startswith('AXIS') and not platform.upper().startswith('BACH'):
+                            from netwalker.discovery.protocol_parser import ProtocolParser
+                            parser = ProtocolParser()
+                            sg_data = parser.parse_sg300_platform_string(platform)
+                            
+                            # Build update query for changed fields
+                            update_fields = []
+                            update_values = []
+                            
+                            # Update platform if different
+                            if sg_data['platform'] != current_platform:
+                                update_fields.append("platform = ?")
+                                update_values.append(sg_data['platform'])
+                            
+                            # Update model if we have new data and it's different
+                            if sg_data['model'] and sg_data['model'] != current_model:
+                                update_fields.append("hardware_model = ?")
+                                update_values.append(sg_data['model'])
+                            
+                            # Execute update if there are changes
+                            if update_fields:
+                                update_fields.append("updated_at = GETDATE()")
+                                update_values.append(device_id)
+                                
+                                cursor.execute(f"""
+                                    UPDATE devices
+                                    SET {', '.join(update_fields)}
+                                    WHERE device_id = ?
+                                """, tuple(update_values))
+                                self.connection.commit()
+                                self.logger.info(f"Updated SG300 device '{hostname}' (ID: {device_id}): platform={sg_data['platform']}, model={sg_data.get('model')}")
+                    
+                    # Check if this is an Axis camera - always parse and update if data has changed
+                    elif platform.upper() == 'AXIS' or '|' in platform or (platform.upper().startswith('AXIS') and 'AXIS' in platform):
+                        from netwalker.discovery.protocol_parser import ProtocolParser
+                        parser = ProtocolParser()
+                        axis_data = parser.parse_axis_platform_string(platform)
+                        
+                        # Build update query for changed fields
+                        update_fields = []
+                        update_values = []
+                        
+                        # Update platform if different
+                        if axis_data['platform'] != current_platform:
+                            update_fields.append("platform = ?")
+                            update_values.append(axis_data['platform'])
+                        
+                        # Update model if we have new data and it's different
+                        if axis_data['model'] and axis_data['model'] != current_model:
+                            update_fields.append("hardware_model = ?")
+                            update_values.append(axis_data['model'])
+                        
+                        # Add camera capability if not present
+                        # Get current capabilities
+                        cursor.execute("SELECT capabilities FROM devices WHERE device_id = ?", (device_id,))
+                        cap_row = cursor.fetchone()
+                        current_caps = cap_row[0] if cap_row and cap_row[0] else ''
+                        if 'camera' not in current_caps.lower():
+                            new_caps = f"{current_caps},camera" if current_caps else "camera"
+                            update_fields.append("capabilities = ?")
+                            update_values.append(new_caps)
+                        
+                        # Execute update if any fields changed
+                        if update_fields:
+                            update_fields.append("updated_at = GETDATE()")
+                            update_values.append(device_id)
+                            
+                            cursor.execute(f"""
+                                UPDATE devices
+                                SET {', '.join(update_fields)}
+                                WHERE device_id = ?
+                            """, tuple(update_values))
+                            self.connection.commit()
+                            self.logger.info(f"Updated Axis camera '{hostname}' (ID: {device_id}): platform={axis_data['platform']}, model={axis_data.get('model')}")
+                        
+                        # Update version if we have one
+                        if axis_data.get('version'):
+                            self.upsert_device_version(device_id, axis_data['version'])
+                            self.logger.info(f"Updated Axis camera '{hostname}' (ID: {device_id}): platform={axis_data['platform']}, model={axis_data.get('model')}")
+                    
+                    # Update Nutanix devices if current platform is generic
+                    elif current_platform in ('Linux', 'Unknown', None) and 'Nutanix' in platform:
+                        cursor.execute("""
+                            UPDATE devices
+                            SET platform = ?, updated_at = GETDATE()
+                            WHERE device_id = ?
+                        """, (platform, device_id))
+                        self.connection.commit()
+                        self.logger.info(f"Updated platform for device '{hostname}' (ID: {device_id}) from '{current_platform}' to '{platform}'")
+                    
+                    # Update Cisco ATA devices if current platform is generic
+                    elif current_platform in ('Unknown', None) and ('Cisco ATA' in platform or ('ATA' in platform and any(char.isdigit() for char in platform))):
+                        cursor.execute("""
+                            UPDATE devices
+                            SET platform = ?, updated_at = GETDATE()
+                            WHERE device_id = ?
+                        """, (platform, device_id))
+                        self.connection.commit()
+                        self.logger.info(f"Updated platform for device '{hostname}' (ID: {device_id}) from '{current_platform}' to '{platform}'")
+                
                 cursor.close()
                 self.logger.debug(f"Resolved hostname '{hostname}' to device_id {device_id}")
                 return device_id
@@ -1254,17 +1409,71 @@ class DatabaseManager:
                     # Create placeholder device record for unwalked neighbor
                     self.logger.info(f"Creating placeholder device for unwalked neighbor: {short_hostname}")
 
+                    # Parse Aruba platform strings to extract model and serial
+                    parsed_platform = platform if platform else 'Unknown'
+                    parsed_model = 'Unwalked Neighbor'
+                    parsed_serial = 'unknown'
+                    
+                    # Check if this is an Aruba AP with detailed platform string
+                    if platform and ('Aruba AP' in platform or 'AOS-' in platform):
+                        from netwalker.discovery.protocol_parser import ProtocolParser
+                        parser = ProtocolParser()
+                        aruba_data = parser.parse_aruba_platform_string(platform)
+                        parsed_platform = aruba_data['platform']
+                        if aruba_data['model']:
+                            parsed_model = aruba_data['model']
+                        if aruba_data['serial']:
+                            parsed_serial = aruba_data['serial']
+                        self.logger.info(f"Parsed Aruba device: platform={parsed_platform}, model={parsed_model}, serial={parsed_serial}")
+                    
+                    # Check if this is a Cisco SG300/SG200/SG500 device
+                    elif platform and ('SG300' in platform or 'SG200' in platform or 'SG500' in platform or '|' in platform):
+                        # Check if it's actually an SG device (not Axis or other delimited format)
+                        if not platform.upper().startswith('AXIS') and not platform.upper().startswith('BACH'):
+                            from netwalker.discovery.protocol_parser import ProtocolParser
+                            parser = ProtocolParser()
+                            sg_data = parser.parse_sg300_platform_string(platform)
+                            parsed_platform = sg_data['platform']
+                            if sg_data['model']:
+                                parsed_model = sg_data['model']
+                            self.logger.info(f"Parsed SG300 device: platform={parsed_platform}, model={parsed_model}")
+                    
+                    # Check if this is an Axis camera
+                    elif platform and (platform.upper() == 'AXIS' or '|' in platform):
+                        from netwalker.discovery.protocol_parser import ProtocolParser
+                        parser = ProtocolParser()
+                        axis_data = parser.parse_axis_platform_string(platform)
+                        parsed_platform = axis_data['platform']
+                        if axis_data['model']:
+                            parsed_model = axis_data['model']
+                        # Store version for later insertion
+                        axis_version = axis_data.get('version')
+                        # Add camera capability
+                        if capabilities:
+                            if 'camera' not in [c.lower() for c in capabilities]:
+                                capabilities.append('camera')
+                        else:
+                            capabilities = ['camera']
+                        self.logger.info(f"Parsed Axis camera: platform={parsed_platform}, model={parsed_model}, version={axis_version}")
+
                     # Convert capabilities list to comma-separated string
                     capabilities_str = ','.join(capabilities) if capabilities else None
-                    platform_str = platform if platform else 'Unknown'
 
                     cursor.execute("""
                         INSERT INTO devices (device_name, serial_number, platform, hardware_model, capabilities, status)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, (short_hostname, 'unknown', platform_str, 'Unwalked Neighbor', capabilities_str, 'active'))
+                    """, (short_hostname, parsed_serial, parsed_platform, parsed_model, capabilities_str, 'active'))
 
                     cursor.execute("SELECT @@IDENTITY")
                     device_id = cursor.fetchone()[0]
+                    
+                    # Insert version if we have one (for Axis cameras)
+                    if 'axis_version' in locals() and axis_version:
+                        cursor.execute("""
+                            INSERT INTO device_versions (device_id, software_version)
+                            VALUES (?, ?)
+                        """, (device_id, axis_version))
+                        self.logger.info(f"Inserted version {axis_version} for Axis camera '{short_hostname}'")
 
                     self.connection.commit()
                     cursor.close()
@@ -1279,68 +1488,6 @@ class DatabaseManager:
         except pyodbc.Error as e:
             self.logger.error(f"Error resolving hostname '{hostname}': {e}")
             return None
-    def get_device_platform(self, host: str) -> Optional[str]:
-        """
-        Get platform for a device by hostname or IP address
-
-        Args:
-            host: Device hostname or IP address
-
-        Returns:
-            Platform string or None if not found
-        """
-        if not self.enabled or not self.is_connected():
-            return None
-
-        if not host:
-            return None
-
-        try:
-            cursor = self.connection.cursor()
-
-            # Strip domain suffix from FQDN if present
-            short_hostname = host.split('.')[0] if '.' in host else host
-
-            # Try by device_name first
-            cursor.execute("""
-                SELECT TOP 1 platform
-                FROM devices
-                WHERE device_name = ?
-                ORDER BY last_seen DESC
-            """, (short_hostname,))
-
-            row = cursor.fetchone()
-
-            if row:
-                platform = row[0]
-                cursor.close()
-                self.logger.debug(f"Found platform '{platform}' for host '{host}'")
-                return platform
-
-            # Try by IP address in device_interfaces table
-            cursor.execute("""
-                SELECT TOP 1 d.platform
-                FROM devices d
-                INNER JOIN device_interfaces di ON d.device_id = di.device_id
-                WHERE di.ip_address = ?
-                ORDER BY d.last_seen DESC
-            """, (host,))
-
-            row = cursor.fetchone()
-            cursor.close()
-
-            if row:
-                platform = row[0]
-                self.logger.debug(f"Found platform '{platform}' for IP '{host}'")
-                return platform
-
-            self.logger.debug(f"No platform found for host '{host}'")
-            return None
-
-        except pyodbc.Error as e:
-            self.logger.error(f"Error getting platform for host '{host}': {e}")
-            return None
-
 
     def get_device_platform(self, host: str) -> Optional[str]:
         """

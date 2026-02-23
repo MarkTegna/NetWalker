@@ -29,6 +29,9 @@ class ProtocolParser:
         self.cdp_ipv4_pattern = re.compile(r'IPv4 Address:\s*(\d+\.\d+\.\d+\.\d+)', re.IGNORECASE)
         self.cdp_interface_address_pattern = re.compile(r'Interface address\(es\):\s*\d+\s*IPv4 Address:\s*(\d+\.\d+\.\d+\.\d+)', re.IGNORECASE | re.DOTALL)
         
+        # Version pattern for extracting version information (used for Nutanix detection)
+        self.cdp_version_pattern = re.compile(r'Version\s*:\s*(.+?)(?:\n|$)', re.IGNORECASE)
+        
         # LLDP parsing patterns - enhanced for NEXUS
         self.lldp_system_name_pattern = re.compile(r'System Name:\s*(.+)', re.IGNORECASE)
         self.lldp_system_desc_pattern = re.compile(r'System Description:\s*(.+)', re.IGNORECASE)
@@ -143,6 +146,72 @@ class ProtocolParser:
             if ',' in platform:
                 platform = platform.split(',')[0].strip()
             
+            # Extract version information
+            version_match = self.cdp_version_pattern.search(entry)
+            version = version_match.group(1).strip() if version_match else None
+            
+            # Nutanix detection: If platform contains "Linux" and version contains "Nutanix"
+            # Use the version information as the platform
+            if version and 'Linux' in platform and 'Nutanix' in version:
+                platform = version
+                self.logger.info(f"Detected Nutanix device: {device_id}, Platform set to: {platform}")
+            
+            # Aruba AP detection: If platform contains "Aruba AP" or "AOS-"
+            # Keep the platform as-is (it already has good information from LLDP)
+            if 'Aruba AP' in platform or 'AOS-' in platform:
+                self.logger.info(f"Detected Aruba AP device: {device_id}, Platform: {platform}")
+            
+            # Cisco ATA detection: If platform contains "Cisco ATA" or "ATA" followed by numbers
+            # These are Analog Telephone Adapters (VoIP devices)
+            if 'Cisco ATA' in platform or ('ATA' in platform and any(char.isdigit() for char in platform)):
+                self.logger.info(f"Detected Cisco ATA device: {device_id}, Platform: {platform}")
+            
+            # Axis camera detection: If platform is "AXIS" or device_id starts with "axis-"
+            # Store full version string which contains model information
+            if platform.upper() == 'AXIS' or device_id.lower().startswith('axis-'):
+                if version:
+                    # Version string often contains model info like "P3265-LV Dome Camera"
+                    platform = f"AXIS|{version}"  # Use delimiter to parse later
+                else:
+                    platform = "AXIS"
+                self.logger.info(f"Detected Axis camera device: {device_id}, Platform: {platform}")
+            
+            # Cisco Paging Group detection: If device_id contains "paginggroup"
+            # These are Cisco Unified Communications Manager paging group devices
+            if 'paginggroup' in device_id.lower():
+                # These devices typically show as "Unknown" platform in CDP
+                # Mark them with a recognizable platform string
+                if platform == 'Unknown' or not platform:
+                    platform = 'Cisco Paging Group'
+                self.logger.info(f"Detected Cisco Paging Group device: {device_id}, Platform: {platform}")
+                # Add VoIP capability
+                if 'VoIP' not in capabilities and 'voip' not in [c.lower() for c in capabilities]:
+                    capabilities.append('VoIP')
+            
+            # Cisco SG300 detection: Parse platform string to extract model and PID
+            # Platform format: "Cisco SG300-20 (PID:SRW2016-K9)-VSD"
+            if 'SG300' in platform or 'SG200' in platform or 'SG500' in platform:
+                # Extract model (e.g., "SG300-20", "SG300-10P")
+                model_match = re.search(r'(SG\d+-\d+[A-Z]*)', platform, re.IGNORECASE)
+                if model_match:
+                    model = model_match.group(1)
+                    
+                    # Extract PID (Product ID) if present
+                    pid_match = re.search(r'PID:([A-Z0-9-]+)', platform, re.IGNORECASE)
+                    pid = pid_match.group(1) if pid_match else None
+                    
+                    # Store as "model|PID" for later parsing
+                    if pid:
+                        platform = f"{model}|{pid}"
+                    else:
+                        platform = model
+                    
+                    self.logger.info(f"Detected Cisco SG300 device: {device_id}, Model: {model}, PID: {pid}")
+                else:
+                    # Fallback: just use "SG300" if we can't parse the model
+                    platform = "SG300"
+                    self.logger.info(f"Detected Cisco SG300 device: {device_id} (generic)")
+            
             self.logger.debug(f"Found CDP platform: {platform}")
             
             # Extract capabilities
@@ -256,6 +325,20 @@ class ProtocolParser:
             # Extract system description (contains platform info)
             desc_match = self.lldp_system_desc_pattern.search(entry)
             platform = desc_match.group(1).strip() if desc_match else "Unknown"
+            
+            # BACH_MINUET detection: Extract firmware version from system description
+            # System Description format: "BACH_MINUET Board model. Fw version: v.2.3.2-b103-UN-ENCRYPTED"
+            if 'BACH_MINUET' in device_id or 'BACH_MINUET' in platform:
+                # Extract firmware version from system description
+                fw_version_match = re.search(r'Fw version:\s*([^\s]+)', platform, re.IGNORECASE)
+                if fw_version_match:
+                    fw_version = fw_version_match.group(1)
+                    # Store as "BACH_MINUET|version" for later parsing
+                    platform = f"BACH_MINUET|{fw_version}"
+                    self.logger.info(f"Detected BACH_MINUET device: {device_id}, Firmware: {fw_version}")
+                else:
+                    platform = "BACH_MINUET"
+                    self.logger.info(f"Detected BACH_MINUET device: {device_id} (no firmware version found)")
             
             # Extract capabilities
             cap_match = self.lldp_capabilities_pattern.search(entry)
@@ -492,3 +575,218 @@ class ProtocolParser:
         
         self.logger.debug(f"Adapted commands for platform {platform}: {commands}")
         return commands
+
+    def parse_aruba_platform_string(self, platform_str: str) -> Dict[str, str]:
+        """
+        Parse Aruba AP platform string to extract platform, model, and serial
+
+        Args:
+            platform_str: Raw platform string like "AOS-10 (MODEL: 655), Aruba AP, Version:10.7.2.1_93286 SSR, serial:PHSHKZ25TY"
+
+        Returns:
+            Dictionary with 'platform', 'model', and 'serial' keys
+        """
+        result = {
+            'platform': platform_str,  # Default to full string
+            'model': None,
+            'serial': None
+        }
+
+        try:
+            # Extract model number: "MODEL: 655" or "(MODEL: 655)"
+            model_match = re.search(r'MODEL:\s*(\d+)', platform_str, re.IGNORECASE)
+            if model_match:
+                result['model'] = f"Aruba {model_match.group(1)}"
+
+            # Extract serial number: "serial:PHSHKZ25TY" or "serial: PHSHKZ25TY"
+            serial_match = re.search(r'serial:\s*([A-Z0-9]+)', platform_str, re.IGNORECASE)
+            if serial_match:
+                result['serial'] = serial_match.group(1)
+
+            # Extract platform: "AOS-10" or "Aruba AP"
+            if 'AOS-' in platform_str:
+                aos_match = re.search(r'(AOS-\d+)', platform_str, re.IGNORECASE)
+                if aos_match:
+                    result['platform'] = aos_match.group(1)
+            elif 'Aruba AP' in platform_str:
+                result['platform'] = 'Aruba AP'
+
+            self.logger.debug(f"Parsed Aruba platform: {result}")
+
+        except Exception as e:
+            self.logger.error(f"Error parsing Aruba platform string: {e}")
+
+        return result
+
+
+    def parse_aruba_platform_string(self, platform_str: str) -> Dict[str, str]:
+        """
+        Parse Aruba AP platform string to extract platform, model, and serial
+        
+        Args:
+            platform_str: Raw platform string like "AOS-10 (MODEL: 655), Aruba AP, Version:10.7.2.1_93286 SSR, serial:PHSHKZ25TY"
+            
+        Returns:
+            Dictionary with 'platform', 'model', and 'serial' keys
+        """
+        result = {
+            'platform': platform_str,  # Default to full string
+            'model': None,
+            'serial': None
+        }
+        
+        try:
+            # Extract model number: "MODEL: 655" or "(MODEL: 655)"
+            model_match = re.search(r'MODEL:\s*(\d+)', platform_str, re.IGNORECASE)
+            if model_match:
+                result['model'] = f"Aruba {model_match.group(1)}"
+            
+            # Extract serial number: "serial:PHSHKZ25TY" or "serial: PHSHKZ25TY"
+            serial_match = re.search(r'serial:\s*([A-Z0-9]+)', platform_str, re.IGNORECASE)
+            if serial_match:
+                result['serial'] = serial_match.group(1)
+            
+            # Extract platform: "AOS-10" or "Aruba AP"
+            if 'AOS-' in platform_str:
+                aos_match = re.search(r'(AOS-\d+)', platform_str, re.IGNORECASE)
+                if aos_match:
+                    result['platform'] = aos_match.group(1)
+            elif 'Aruba AP' in platform_str:
+                result['platform'] = 'Aruba AP'
+            
+            self.logger.debug(f"Parsed Aruba platform: {result}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing Aruba platform string: {e}")
+        
+        return result
+
+    def parse_axis_platform_string(self, platform_str: str) -> Dict[str, str]:
+        """
+        Parse Axis camera platform string to extract platform, model, and version
+        
+        Args:
+            platform_str: Raw platform string like "AXIS|P3265-LV Dome Camera 10.12.130"
+            
+        Returns:
+            Dictionary with 'platform', 'model', and 'version' keys
+        """
+        result = {
+            'platform': 'AXIS',
+            'model': None,
+            'version': None
+        }
+        
+        try:
+            # Check if this is our delimited format
+            if '|' in platform_str:
+                parts = platform_str.split('|', 1)
+                result['platform'] = parts[0]
+                version_str = parts[1] if len(parts) > 1 else ''
+            else:
+                version_str = platform_str
+            
+            # Extract model: Look for pattern like "P3265-LV Dome Camera" or "M3046-V"
+            # Axis models typically start with a letter followed by numbers
+            model_match = re.search(r'([A-Z]\d+[A-Z0-9-]*(?:\s+[A-Za-z\s]+Camera)?)', version_str, re.IGNORECASE)
+            if model_match:
+                result['model'] = f"Axis {model_match.group(1).strip()}"
+            
+            # Extract version: Look for version number pattern like "10.12.130"
+            version_match = re.search(r'(\d+\.\d+\.\d+)', version_str)
+            if version_match:
+                result['version'] = version_match.group(1)
+            
+            self.logger.debug(f"Parsed Axis camera: {result}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing Axis platform string: {e}")
+        
+        return result
+
+    def parse_bach_minuet_platform_string(self, platform_str: str) -> Dict[str, str]:
+        """
+        Parse BACH_MINUET platform string to extract platform, model, and firmware version
+        
+        Args:
+            platform_str: Raw platform string like "BACH_MINUET|v.2.3.2-b103-UN-ENCRYPTED"
+            
+        Returns:
+            Dictionary with 'platform', 'model', and 'version' keys
+        """
+        result = {
+            'platform': 'BACH_MINUET',
+            'model': 'BACH_MINUET Board',
+            'version': None
+        }
+        
+        try:
+            # Check if this is our delimited format
+            if '|' in platform_str:
+                parts = platform_str.split('|', 1)
+                result['platform'] = parts[0]
+                version_str = parts[1] if len(parts) > 1 else ''
+            else:
+                version_str = platform_str
+            
+            # Extract firmware version: Look for pattern like "v.2.3.2-b103-UN-ENCRYPTED"
+            # Version format: v.X.X.X-bXXX-ENCRYPTED/UN-ENCRYPTED
+            version_match = re.search(r'(v\.\d+\.\d+\.\d+-b\d+(?:-(?:UN-)?ENCRYPTED)?)', version_str, re.IGNORECASE)
+            if version_match:
+                result['version'] = version_match.group(1)
+            
+            self.logger.debug(f"Parsed BACH_MINUET device: {result}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing BACH_MINUET platform string: {e}")
+        
+        return result
+
+    def parse_sg300_platform_string(self, platform_str: str) -> Dict[str, str]:
+        """
+        Parse Cisco SG300 platform string to extract platform, model, and PID
+        
+        Args:
+            platform_str: Raw platform string like "SG300-20|SRW2016-K9"
+            
+        Returns:
+            Dictionary with 'platform', 'model', and 'pid' keys
+        """
+        result = {
+            'platform': 'SG300',
+            'model': None,
+            'pid': None
+        }
+        
+        try:
+            # Check if this is our delimited format
+            if '|' in platform_str:
+                parts = platform_str.split('|', 1)
+                model = parts[0]
+                pid = parts[1] if len(parts) > 1 else None
+            else:
+                model = platform_str
+                pid = None
+            
+            # Set platform based on model series
+            if 'SG200' in model:
+                result['platform'] = 'SG200'
+            elif 'SG300' in model:
+                result['platform'] = 'SG300'
+            elif 'SG500' in model:
+                result['platform'] = 'SG500'
+            
+            # Set model (e.g., "SG300-20 SRW2016-K9")
+            if pid:
+                result['model'] = f"{model} {pid}"
+            else:
+                result['model'] = model
+            
+            result['pid'] = pid
+            
+            self.logger.debug(f"Parsed SG300 device: {result}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing SG300 platform string: {e}")
+        
+        return result

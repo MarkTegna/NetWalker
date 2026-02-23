@@ -324,8 +324,8 @@ class StackCollector:
             self.logger.warning("No output from 'show inventory' command - stack members will have incomplete data")
             return stack_members
         
-        # Log raw output for debugging (first 1000 chars at INFO level)
-        self.logger.info(f"Raw 'show inventory' output (first 1000 chars): {output[:1000]}")
+        # Log raw output for debugging (first 1000 chars at DEBUG level)
+        self.logger.debug(f"Raw 'show inventory' output (first 1000 chars): {output[:1000]}")
         
         # Parse inventory output and update stack members
         detail_map = self._parse_ios_inventory(output)
