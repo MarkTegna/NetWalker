@@ -212,6 +212,33 @@ class ProtocolParser:
                     platform = "SG300"
                     self.logger.info(f"Detected Cisco SG300 device: {device_id} (generic)")
             
+            # Polycom detection: Handle both CDP and LLDP formats
+            # CDP format: Platform="Polycom VVX 250", Version="Updater: 6.4.6.2681, App: 6.4.6.2681"
+            # LLDP format: Platform="Polycom;VVX-VVX_401;3111-48400-001,1;SIP/6.4.7.4560/05-Dec-24 00:58;UP/6.4.7.3828/05-Dec-24 01:22;"
+            if 'Polycom' in platform:
+                if ';' in platform:
+                    # LLDP semicolon-delimited format - keep as-is for later parsing
+                    self.logger.info(f"Detected Polycom device (LLDP format): {device_id}, Platform: {platform}")
+                elif version and ('Updater:' in version or 'App:' in version):
+                    # CDP format with version information - combine platform and version
+                    # Extract Updater and App versions from version string
+                    updater_match = re.search(r'Updater:\s*([0-9.]+)', version, re.IGNORECASE)
+                    app_match = re.search(r'App:\s*([0-9.]+)', version, re.IGNORECASE)
+                    
+                    updater_ver = updater_match.group(1) if updater_match else None
+                    app_ver = app_match.group(1) if app_match else None
+                    
+                    # Store in a parseable format: "Polycom VVX 250|Updater:6.4.6.2681|App:6.4.6.2681"
+                    if updater_ver and app_ver:
+                        platform = f"{platform}|Updater:{updater_ver}|App:{app_ver}"
+                        self.logger.info(f"Detected Polycom device (CDP format): {device_id}, Platform: {platform}, Updater: {updater_ver}, App: {app_ver}")
+                    elif app_ver:
+                        platform = f"{platform}|App:{app_ver}"
+                        self.logger.info(f"Detected Polycom device (CDP format): {device_id}, Platform: {platform}, App: {app_ver}")
+                else:
+                    # Simple Polycom platform without version info
+                    self.logger.info(f"Detected Polycom device (simple format): {device_id}, Platform: {platform}")
+            
             self.logger.debug(f"Found CDP platform: {platform}")
             
             # Extract capabilities
@@ -790,3 +817,113 @@ class ProtocolParser:
             self.logger.error(f"Error parsing SG300 platform string: {e}")
         
         return result
+
+    def parse_polycom_platform_string(self, platform_str: str) -> Dict[str, str]:
+        """
+        Parse Polycom platform string to extract platform, model, and firmware versions
+        
+        Handles two formats:
+        1. LLDP semicolon-delimited: "Polycom;VVX-VVX_401;3111-48400-001,1;SIP/6.4.7.4560/05-Dec-24 00:58;UP/6.4.7.3828/05-Dec-24 01:22;"
+        2. CDP pipe-delimited: "Polycom VVX 250|Updater:6.4.6.2681|App:6.4.6.2681"
+        
+        Args:
+            platform_str: Raw platform string from CDP or LLDP
+            
+        Returns:
+            Dictionary with 'platform', 'model', 'part_number', 'updater_firmware', 'app_firmware', 'sip_firmware', 'up_firmware' keys
+        """
+        result = {
+            'platform': 'Polycom',
+            'model': None,
+            'part_number': None,
+            'updater_firmware': None,  # CDP format
+            'app_firmware': None,      # CDP format
+            'sip_firmware': None,      # LLDP format
+            'up_firmware': None        # LLDP format
+        }
+        
+        try:
+            # Check for CDP pipe-delimited format first
+            if '|' in platform_str and ('Updater:' in platform_str or 'App:' in platform_str):
+                # CDP format: "Polycom VVX 250|Updater:6.4.6.2681|App:6.4.6.2681"
+                parts = platform_str.split('|')
+                
+                # Part 0: Platform and model (e.g., "Polycom VVX 250")
+                if len(parts) > 0 and parts[0].strip():
+                    model_str = parts[0].strip()
+                    result['model'] = model_str
+                    # Extract just "Polycom" as platform
+                    if model_str.startswith('Polycom'):
+                        result['platform'] = 'Polycom'
+                
+                # Part 1+: Firmware versions
+                for part in parts[1:]:
+                    part = part.strip()
+                    if part.startswith('Updater:'):
+                        result['updater_firmware'] = part.replace('Updater:', '').strip()
+                    elif part.startswith('App:'):
+                        result['app_firmware'] = part.replace('App:', '').strip()
+                
+                self.logger.debug(f"Parsed Polycom (CDP format): {result}")
+                return result
+            
+            # Check for LLDP semicolon-delimited format
+            if ';' in platform_str:
+                # LLDP format: "Polycom;VVX-VVX_401;3111-48400-001,1;SIP/6.4.7.4560/05-Dec-24 00:58;UP/6.4.7.3828/05-Dec-24 01:22;"
+                parts = platform_str.split(';')
+                
+                # Part 0: Manufacturer (should be "Polycom")
+                if len(parts) > 0 and parts[0].strip():
+                    result['platform'] = parts[0].strip()
+                
+                # Part 1: Model (e.g., "VVX-VVX_401", "VVX-VVX_411")
+                if len(parts) > 1 and parts[1].strip():
+                    model_str = parts[1].strip()
+                    # Extract model name: "VVX-VVX_401" -> "VVX 401"
+                    model_match = re.search(r'VVX[_-]VVX[_-](\w+)', model_str, re.IGNORECASE)
+                    if model_match:
+                        model_code = model_match.group(1).replace('_', ' ')
+                        result['model'] = f"Polycom VVX {model_code}"
+                    else:
+                        # Try simpler pattern: VVX_XXX or VVX-XXX
+                        simple_match = re.search(r'VVX[_-](\w+)', model_str, re.IGNORECASE)
+                        if simple_match:
+                            model_code = simple_match.group(1).replace('_', ' ')
+                            result['model'] = f"Polycom VVX {model_code}"
+                        else:
+                            # Fallback: use the whole string
+                            result['model'] = f"Polycom {model_str}"
+                
+                # Part 2: Part Number (e.g., "3111-48400-001,1")
+                if len(parts) > 2 and parts[2].strip():
+                    result['part_number'] = parts[2].strip()
+                
+                # Part 3: SIP Firmware (e.g., "SIP/6.4.7.4560/05-Dec-24 00:58")
+                if len(parts) > 3 and parts[3].strip():
+                    sip_str = parts[3].strip()
+                    # Extract version: "SIP/6.4.7.4560/05-Dec-24 00:58" -> "6.4.7.4560"
+                    sip_match = re.search(r'SIP/([0-9.]+)', sip_str, re.IGNORECASE)
+                    if sip_match:
+                        result['sip_firmware'] = sip_match.group(1)
+                
+                # Part 4: UP Firmware (e.g., "UP/6.4.7.3828/05-Dec-24 01:22")
+                if len(parts) > 4 and parts[4].strip():
+                    up_str = parts[4].strip()
+                    # Extract version: "UP/6.4.7.3828/05-Dec-24 01:22" -> "6.4.7.3828"
+                    up_match = re.search(r'UP/([0-9.]+)', up_str, re.IGNORECASE)
+                    if up_match:
+                        result['up_firmware'] = up_match.group(1)
+                
+                self.logger.debug(f"Parsed Polycom (LLDP format): {result}")
+                return result
+            
+            # Simple format without delimiters (e.g., "Polycom VVX 150")
+            result['platform'] = platform_str
+            result['model'] = platform_str
+            self.logger.debug(f"Parsed Polycom (simple format): {result}")
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing Polycom platform string: {e}")
+        
+        return result
+

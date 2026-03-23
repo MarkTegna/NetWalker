@@ -267,6 +267,26 @@ class DatabaseManager:
                 END
             """)
 
+            # Add uptime_hours column to existing devices table if it doesn't exist
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.columns
+                              WHERE object_id = OBJECT_ID('devices')
+                              AND name = 'uptime_hours')
+                BEGIN
+                    ALTER TABLE devices ADD uptime_hours FLOAT NULL;
+                END
+            """)
+
+            # Add uptime_raw column to store original uptime string
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.columns
+                              WHERE object_id = OBJECT_ID('devices')
+                              AND name = 'uptime_raw')
+                BEGIN
+                    ALTER TABLE devices ADD uptime_raw NVARCHAR(255) NULL;
+                END
+            """)
+
             # Create device_versions table
             cursor.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_versions')
@@ -655,6 +675,72 @@ class DatabaseManager:
 
         return status
 
+    @staticmethod
+    def parse_uptime_to_hours(uptime_str: str) -> Optional[float]:
+        """
+        Parse an uptime string into total hours.
+
+        Supports formats:
+        - Cisco IOS: "2 years, 45 weeks, 3 days, 14 hours, 32 minutes"
+        - Cisco NX-OS: "123 day(s), 4 hour(s), 32 minute(s), 15 second(s)"
+        - PAN-OS: "142 days, 14:26:05"
+        - Partial: "5 weeks, 2 days", "3 hours, 45 minutes", etc.
+
+        Args:
+            uptime_str: Raw uptime string
+
+        Returns:
+            Total hours as float, or None if parsing fails
+        """
+        import re
+
+        if not uptime_str or uptime_str.lower() in ('unknown', ''):
+            return None
+
+        total_hours = 0.0
+
+        # Extract years
+        match = re.search(r'(\d+)\s*year', uptime_str, re.IGNORECASE)
+        if match:
+            total_hours += int(match.group(1)) * 365.25 * 24
+
+        # Extract weeks
+        match = re.search(r'(\d+)\s*week', uptime_str, re.IGNORECASE)
+        if match:
+            total_hours += int(match.group(1)) * 7 * 24
+
+        # Extract days
+        match = re.search(r'(\d+)\s*day', uptime_str, re.IGNORECASE)
+        if match:
+            total_hours += int(match.group(1)) * 24
+
+        # Extract hours
+        match = re.search(r'(\d+)\s*hour', uptime_str, re.IGNORECASE)
+        if match:
+            total_hours += int(match.group(1))
+
+        # Extract minutes
+        match = re.search(r'(\d+)\s*minute', uptime_str, re.IGNORECASE)
+        if match:
+            total_hours += int(match.group(1)) / 60.0
+
+        # Extract seconds
+        match = re.search(r'(\d+)\s*second', uptime_str, re.IGNORECASE)
+        if match:
+            total_hours += int(match.group(1)) / 3600.0
+
+        # Try PAN-OS HH:MM:SS format (e.g., "142 days, 14:26:05")
+        match = re.search(r'(\d+):(\d+):(\d+)', uptime_str)
+        if match:
+            total_hours += int(match.group(1))
+            total_hours += int(match.group(2)) / 60.0
+            total_hours += int(match.group(3)) / 3600.0
+
+        # Round to 2 decimal places
+        total_hours = round(total_hours, 2)
+
+        return total_hours if total_hours > 0 else None
+
     def upsert_device(self, device_info: Dict[str, Any]) -> Optional[tuple]:
         """
         Insert or update device record
@@ -674,6 +760,13 @@ class DatabaseManager:
         platform = device_info.get('platform', '')
         hardware_model = device_info.get('hardware_model', '')
         capabilities = device_info.get('capabilities', [])
+
+        # Convert capabilities list to comma-separated string
+        capabilities_str = ','.join(capabilities) if capabilities else None
+
+        # Parse uptime to total hours
+        uptime_raw = device_info.get('uptime', '')
+        uptime_hours = self.parse_uptime_to_hours(uptime_raw) if uptime_raw else None
 
         # Convert capabilities list to comma-separated string
         capabilities_str = ','.join(capabilities) if capabilities else None
@@ -703,9 +796,11 @@ class DatabaseManager:
                         platform = ?,
                         hardware_model = ?,
                         capabilities = ?,
+                        uptime_hours = ?,
+                        uptime_raw = ?,
                         updated_at = GETDATE()
                     WHERE device_id = ?
-                """, (platform, hardware_model, capabilities_str, device_id))
+                """, (platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, device_id))
 
                 self.logger.debug(f"Updated device: {device_name} (ID: {device_id})")
             else:
@@ -729,18 +824,20 @@ class DatabaseManager:
                                 platform = ?,
                                 hardware_model = ?,
                                 capabilities = ?,
+                                uptime_hours = ?,
+                                uptime_raw = ?,
                                 updated_at = GETDATE()
                             WHERE device_id = ?
-                        """, (serial_number, platform, hardware_model, capabilities_str, device_id))
+                        """, (serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, device_id))
 
                         self.logger.info(f"Updated unwalked neighbor to walked device: {device_name} (ID: {device_id})")
                         is_new_device = True  # Count as new since it's now fully walked
                     else:
                         # No unwalked neighbor found, insert new device
                         cursor.execute("""
-                            INSERT INTO devices (device_name, serial_number, platform, hardware_model, capabilities)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (device_name, serial_number, platform, hardware_model, capabilities_str))
+                            INSERT INTO devices (device_name, serial_number, platform, hardware_model, capabilities, uptime_hours, uptime_raw)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (device_name, serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw))
 
                         cursor.execute("SELECT @@IDENTITY")
                         device_id = cursor.fetchone()[0]

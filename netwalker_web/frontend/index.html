@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetWalker Web UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">NetWalker Web UI</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/">Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/devices.html">Device Inventory</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/docs">API Docs</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-12">
+                <h1>NetWalker Network Inventory</h1>
+                <p class="lead">Web-based reporting and visualization for network discovery data</p>
+            </div>
+        </div>
+
+        <!-- Statistics Cards -->
+        <div class="row mt-4">
+            <div class="col-md-3">
+                <div class="card text-white bg-primary">
+                    <div class="card-body">
+                        <h5 class="card-title">Total Devices</h5>
+                        <h2 id="total-devices">-</h2>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-white bg-success">
+                    <div class="card-body">
+                        <h5 class="card-title">Stack Devices</h5>
+                        <h2 id="stack-devices">-</h2>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-white bg-info">
+                    <div class="card-body">
+                        <h5 class="card-title">Connections</h5>
+                        <h2 id="total-connections">-</h2>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-white bg-warning">
+                    <div class="card-body">
+                        <h5 class="card-title">VLANs</h5>
+                        <h2 id="total-vlans">-</h2>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Device Search -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Quick Actions</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Device Inventory</h5>
+                                        <p class="card-text">Browse, search, and filter all discovered devices</p>
+                                        <a href="/devices.html" class="btn btn-primary">View Devices</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Export Reports</h5>
+                                        <p class="card-text">Generate Excel reports from database</p>
+                                        <a href="/api/reports/devices" class="btn btn-success">Device Report</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h5 class="card-title">API Documentation</h5>
+                                        <p class="card-text">Interactive API documentation and testing</p>
+                                        <a href="/docs" class="btn btn-info">View API Docs</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Device Search -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Quick Device Search</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="input-group mb-3">
+                            <input type="text" class="form-control" id="search-input" placeholder="Search by device name, IP, or serial number...">
+                            <button class="btn btn-primary" type="button" id="search-button">Search</button>
+                        </div>
+                        <div id="search-results"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Devices -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Recent Devices</h5>
+                        <a href="/api/reports/devices" class="btn btn-sm btn-success">Export to Excel</a>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Device Name</th>
+                                        <th>Platform</th>
+                                        <th>Model</th>
+                                        <th>IP Address</th>
+                                        <th>Software Version</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="devices-table">
+                                    <tr>
+                                        <td colspan="6" class="text-center">Loading...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <button class="btn btn-primary" id="load-more">Load More</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Platform Statistics -->
+        <div class="row mt-4 mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Devices by Platform</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="platform-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="bg-light text-center text-muted py-3 mt-5">
+        <div class="container">
+            <p>NetWalker Web UI v0.1.0 by Mark Oldham</p>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script>
+        // Load statistics
+        loadStats();
+        
+        // Load devices
+        let currentOffset = 0;
+        loadDevices(currentOffset);
+        
+        // Load platform chart
+        loadPlatformChart();
+        
+        // Search functionality
+        document.getElementById('search-button').addEventListener('click', performSearch);
+        document.getElementById('search-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+        
+        // Load more button
+        document.getElementById('load-more').addEventListener('click', function() {
+            currentOffset += 50;
+            loadDevices(currentOffset, true);
+        });
+    </script>
+</body>
+</html>

@@ -1,272 +1,328 @@
-# NetWalker Web Interface
+# NetWalker Web UI
 
-**Version:** 1.0.0  
-**Author:** Mark Oldham  
-**Platform:** Windows
+A web-based reporting and visualization interface for NetWalker network discovery data.
 
 ## Overview
 
-NetWalker Web Interface is a Flask-based web application that provides a comprehensive front-end for querying and exploring the NetWalker inventory database. It offers intuitive navigation, filtering, and detailed views of all network devices, VLANs, and interfaces.
+NetWalker Web UI provides a modern web interface for viewing, searching, and reporting on network device inventory collected by NetWalker. It connects to the same SQL Server database used by NetWalker and provides:
 
-## Features
+- **Device Inventory**: Browse and search all discovered devices
+- **Topology Visualization**: View network connections and relationships
+- **Stack Members**: Detailed view of switch stack configurations
+- **Reports**: Generate Excel reports from database
+- **Search**: Advanced filtering and search capabilities
+- **Historical Data**: View device changes over time
 
-### Dashboard
-- Real-time statistics (active devices, VLANs, interfaces, platforms)
-- Recently updated devices
-- Quick navigation links
+## Architecture
 
-### Device Management
-- List all devices with filtering by platform, status, and search
-- Detailed device view with:
-  - Device information (name, serial, platform, hardware model)
-  - Software version history
-  - All interfaces with IP addresses
-  - All VLANs configured on the device
-- Clickable rows for easy navigation
+- **Backend**: FastAPI (Python) - RESTful API
+- **Frontend**: HTML/JavaScript with Bootstrap - Simple, no build process
+- **Database**: Microsoft SQL Server (shared with NetWalker)
+- **Deployment**: Standalone Python application or Docker container
 
-### VLAN Management
-- List all VLANs with filtering by name and number
-- Detailed VLAN view with:
-  - VLAN information (number, name, timestamps)
-  - All devices using this VLAN
-  - Port counts per device
-- Clickable rows for easy navigation
-
-### Interface Management
-- List all interfaces with filtering by type and search
-- Detailed interface view with:
-  - Interface information (name, IP, subnet, type)
-  - Parent device link
-  - Timestamps
-- Search by interface name, IP address, or device name
-
-### Reports
-- **Platform Distribution**: Device count by platform type
-- **Software Version Distribution**: Current software versions across all devices
-- **Stale Devices**: Devices not seen recently (configurable threshold)
-- **VLAN Consistency**: VLANs with inconsistent names across devices
-
-### Global Search
-- Search across devices, VLANs, and interfaces
-- Results grouped by category
-- Clickable results for quick navigation
-
-### Navigation
-- Breadcrumb navigation on all pages
-- Back button functionality
-- Persistent search bar in navigation
-- Active page highlighting
-
-## Installation
+## Quick Start
 
 ### Prerequisites
 
-1. **Python 3.8+** installed
-2. **ODBC Driver 17 or 18 for SQL Server** installed
-3. **Access to NetWalker database** (eit-prisqldb01.tgna.tegna.com)
+- Python 3.8 or higher
+- Access to NetWalker SQL Server database
+- NetWalker configuration file (`netwalker.ini`)
 
-### Install ODBC Driver (if not already installed)
+### Installation
 
-Download and install from Microsoft:
-https://docs.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server
+1. **Install dependencies**:
+   ```powershell
+   cd netwalker_web
+   pip install -r requirements.txt
+   ```
 
-### Install Python Dependencies
+2. **Configure database connection**:
+   - Copy `netwalker.ini` from NetWalker project to this directory
+   - Or set environment variables:
+     ```powershell
+     $env:DB_SERVER="your-sql-server.domain.com"
+     $env:DB_DATABASE="NetWalker"
+     $env:DB_USERNAME="NetWalker"
+     $env:DB_PASSWORD="your-password"
+     ```
 
-```powershell
-cd netwalker_web
-pip install -r requirements.txt
-```
+3. **Run the application**:
+   ```powershell
+   python app.py
+   ```
+
+4. **Open browser**:
+   - Navigate to: http://localhost:8000
+   - API documentation: http://localhost:8000/docs
+
+## Features
+
+### Device Inventory
+- View all discovered devices with details
+- Filter by platform, status, site
+- Search by hostname, IP address, serial number
+- Export to Excel
+
+### Topology View
+- Visual network topology diagram
+- Device connections via CDP/LLDP
+- Interactive graph navigation
+- Export topology data
+
+### Stack Members
+- Detailed switch stack information
+- Individual member details
+- Serial numbers and models
+- Role and state information
+
+### Reports
+- Generate Excel reports on-demand
+- Device inventory reports
+- Stack member reports
+- Custom filtered reports
+- Historical data exports
+
+### Search & Filter
+- Advanced search across all fields
+- Multiple filter criteria
+- Save favorite searches
+- Quick filters for common queries
+
+## API Endpoints
+
+### Devices
+- `GET /api/devices` - List all devices
+- `GET /api/devices/{device_id}` - Get device details
+- `GET /api/devices/search?q={query}` - Search devices
+- `GET /api/devices/filter?platform={platform}&status={status}` - Filter devices
+
+### Topology
+- `GET /api/topology` - Get full network topology
+- `GET /api/topology/{device_id}` - Get device neighbors
+- `GET /api/topology/site/{site_code}` - Get site topology
+
+### Stack Members
+- `GET /api/stacks` - List all stack devices
+- `GET /api/stacks/{device_id}/members` - Get stack members
+
+### Reports
+- `GET /api/reports/devices` - Generate device inventory report
+- `GET /api/reports/stacks` - Generate stack member report
+- `GET /api/reports/topology` - Generate topology report
+
+### Statistics
+- `GET /api/stats/summary` - Database summary statistics
+- `GET /api/stats/platforms` - Device count by platform
+- `GET /api/stats/sites` - Device count by site
 
 ## Configuration
 
-The application is pre-configured to connect to the NetWalker database. If you need to change the connection settings, edit `app.py`:
+### Database Configuration (`netwalker.ini`)
+
+```ini
+[database]
+enabled = true
+server = your-sql-server.domain.com
+port = 1433
+database = NetWalker
+username = NetWalker
+password = ENC:base64encodedpassword
+trust_server_certificate = true
+connection_timeout = 30
+command_timeout = 60
+```
+
+### Application Configuration (`config.py`)
 
 ```python
-DB_CONFIG = {
-    'server': 'eit-prisqldb01.tgna.tegna.com',
-    'port': 1433,
-    'database': 'NetWalker',
-    'username': 'NetWalker',
-    'password': 'FluffyBunnyHitbyaBus',
-    'driver': 'ODBC Driver 17 for SQL Server'
-}
+# Server settings
+HOST = "0.0.0.0"
+PORT = 8000
+DEBUG = False
+
+# CORS settings (for API access from other domains)
+CORS_ORIGINS = ["*"]
+
+# Pagination
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 1000
 ```
 
-## Running the Application
+## Development
 
-### Development Mode
-
-```powershell
-cd netwalker_web
-python app.py
-```
-
-The application will start on `http://localhost:5000`
-
-### Production Mode
-
-For production deployment, use a WSGI server like Waitress:
-
-```powershell
-pip install waitress
-waitress-serve --host=0.0.0.0 --port=5000 app:app
-```
-
-## Usage
-
-### Accessing the Application
-
-1. Open your web browser
-2. Navigate to `http://localhost:5000`
-3. Use the navigation menu to explore different sections
-
-### Filtering and Search
-
-- **Devices Page**: Filter by platform, status, or search by name/serial
-- **VLANs Page**: Filter by VLAN number or search by name
-- **Interfaces Page**: Filter by type or search by interface/IP/device
-- **Global Search**: Use the search bar in the navigation to search across all categories
-
-### Viewing Details
-
-- Click on any row in a table to view detailed information
-- Use the "Back" link or browser back button to return to the previous page
-- Use breadcrumb navigation to jump to any parent page
-
-### Reports
-
-1. Click "Reports" in the navigation menu
-2. Select a report to view
-3. Some reports have configurable parameters (e.g., stale devices threshold)
-
-## Database Schema
-
-The application queries the following tables:
-
-- **devices**: Network devices (routers, switches, etc.)
-- **device_versions**: Software versions per device
-- **device_interfaces**: Interfaces and IP addresses
-- **vlans**: Master VLAN registry
-- **device_vlans**: VLAN-to-device associations
-
-For complete database documentation, see `.kiro/steering/netwalker-database.md`
-
-## File Structure
+### Project Structure
 
 ```
 netwalker_web/
-├── app.py                          # Main Flask application
-├── requirements.txt                # Python dependencies
-├── README.md                       # This file
-└── templates/                      # HTML templates
-    ├── base.html                   # Base template with navigation
-    ├── index.html                  # Dashboard
-    ├── devices.html                # Device list
-    ├── device_detail.html          # Device details
-    ├── vlans.html                  # VLAN list
-    ├── vlan_detail.html            # VLAN details
-    ├── interfaces.html             # Interface list
-    ├── interface_detail.html       # Interface details
-    ├── reports.html                # Reports menu
-    ├── report_platforms.html       # Platform distribution report
-    ├── report_software.html        # Software version report
-    ├── report_stale.html           # Stale devices report
-    ├── report_vlan_consistency.html # VLAN consistency report
-    └── search.html                 # Global search results
+├── app.py                  # Main application entry point
+├── config.py               # Configuration settings
+├── requirements.txt        # Python dependencies
+├── README.md              # This file
+├── DATABASE_SCHEMA.md     # Database schema documentation
+│
+├── backend/               # Backend API
+│   ├── __init__.py
+│   ├── database.py        # Database connection and queries
+│   ├── models.py          # Data models
+│   ├── api/               # API endpoints
+│   │   ├── __init__.py
+│   │   ├── devices.py     # Device endpoints
+│   │   ├── topology.py    # Topology endpoints
+│   │   ├── stacks.py      # Stack member endpoints
+│   │   ├── reports.py     # Report generation endpoints
+│   │   └── stats.py       # Statistics endpoints
+│   └── utils/             # Utility functions
+│       ├── __init__.py
+│       ├── config_manager.py  # Config file parser (from NetWalker)
+│       └── excel_export.py    # Excel generation
+│
+├── frontend/              # Frontend web interface
+│   ├── index.html         # Main page
+│   ├── devices.html       # Device inventory page
+│   ├── topology.html      # Topology visualization page
+│   ├── stacks.html        # Stack members page
+│   ├── reports.html       # Reports page
+│   ├── static/            # Static assets
+│   │   ├── css/
+│   │   │   └── style.css  # Custom styles
+│   │   └── js/
+│   │       ├── api.js     # API client
+│   │       ├── devices.js # Device page logic
+│   │       ├── topology.js # Topology page logic
+│   │       └── common.js  # Shared utilities
+│   └── templates/         # HTML templates (if using Jinja2)
+│
+└── tests/                 # Unit tests
+    ├── __init__.py
+    ├── test_api.py
+    └── test_database.py
 ```
 
-## Troubleshooting
+### Running Tests
 
-### Connection Errors
+```powershell
+# Install test dependencies
+pip install pytest pytest-asyncio
 
-If you see "Database error: Connection failed":
-
-1. Verify ODBC driver is installed: `odbcad32.exe`
-2. Test database connectivity from command line
-3. Check firewall settings
-4. Verify credentials in `app.py`
-
-### ODBC Driver Not Found
-
-If you see "Data source name not found":
-
-1. Install ODBC Driver 17 or 18 for SQL Server
-2. Update `DB_CONFIG['driver']` in `app.py` to match your installed driver
-3. Check available drivers: Run `odbcad32.exe` and view "Drivers" tab
-
-### Port Already in Use
-
-If port 5000 is already in use:
-
-```python
-# Change port in app.py
-app.run(debug=True, host='0.0.0.0', port=8080)
+# Run tests
+pytest tests/
 ```
 
-### Slow Performance
+### Building for Production
 
-For large datasets:
+```powershell
+# Install production dependencies
+pip install gunicorn
 
-1. Ensure database indexes are created (see database setup documentation)
-2. Use filtering options to reduce result sets
-3. Consider adding pagination for large tables
+# Run with Gunicorn (Linux/Mac)
+gunicorn app:app --bind 0.0.0.0:8000 --workers 4
+
+# Run with Waitress (Windows)
+pip install waitress
+waitress-serve --host=0.0.0.0 --port=8000 app:app
+```
+
+## Deployment
+
+### Option 1: Standalone Python Application
+
+```powershell
+# Install as Windows service using NSSM
+nssm install NetWalkerWeb "C:\Python\python.exe" "C:\NetWalker\netwalker_web\app.py"
+nssm start NetWalkerWeb
+```
+
+### Option 2: Docker Container
+
+```powershell
+# Build Docker image
+docker build -t netwalker-web .
+
+# Run container
+docker run -d -p 8000:8000 --name netwalker-web netwalker-web
+```
+
+### Option 3: IIS with FastCGI
+
+1. Install Python and dependencies
+2. Configure IIS with FastCGI module
+3. Create web.config for FastAPI application
+4. Deploy to IIS website
 
 ## Security Considerations
 
-### Production Deployment
+### Authentication
+- Currently no authentication (internal use only)
+- For production, add authentication middleware
+- Consider Windows Authentication for corporate environments
 
-For production use:
+### Database Access
+- Use read-only database user for web UI
+- Limit permissions to SELECT only
+- No write operations from web UI
 
-1. **Change the secret key** in `app.py`:
-   ```python
-   app.secret_key = 'your-secure-random-key-here'
-   ```
+### Network Security
+- Deploy behind corporate firewall
+- Use HTTPS in production
+- Configure CORS appropriately
 
-2. **Disable debug mode**:
-   ```python
-   app.run(debug=False, host='0.0.0.0', port=5000)
-   ```
+## Troubleshooting
 
-3. **Use environment variables** for credentials:
-   ```python
-   import os
-   DB_CONFIG['password'] = os.getenv('NETWALKER_DB_PASSWORD')
-   ```
+### Database Connection Issues
+```
+Error: Cannot connect to database
+```
+**Solution**: Verify `netwalker.ini` configuration and SQL Server connectivity
 
-4. **Use HTTPS** with a reverse proxy (nginx, IIS)
+### Port Already in Use
+```
+Error: Address already in use
+```
+**Solution**: Change PORT in `config.py` or stop conflicting service
 
-5. **Implement authentication** if exposing to untrusted networks
+### Excel Export Fails
+```
+Error: Permission denied
+```
+**Solution**: Ensure write permissions to temp directory
 
 ## Future Enhancements
 
-Potential features for future versions:
-
 - User authentication and authorization
-- Export to CSV/Excel functionality
-- Advanced filtering with multiple criteria
-- Graphical charts and visualizations
-- Device comparison tool
-- Change history tracking
-- Email alerts for stale devices
-- API endpoints for programmatic access
-- Pagination for large result sets
-- Saved searches and bookmarks
+- Real-time updates via WebSockets
+- Advanced topology visualization (D3.js, Cytoscape.js)
+- Custom dashboard widgets
+- Scheduled report generation
+- Email notifications
+- Device configuration backup integration
+- Change tracking and auditing
+- Multi-tenant support
 
-## Support
+## Contributing
 
-For questions or issues:
-- Contact: Mark Oldham
-- Repository: https://github.com/MarkTegna/NetWalker
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
 ## License
 
-See LICENSE file in the NetWalker repository.
+Same license as NetWalker (MIT)
+
+## Author
+
+**Mark Oldham**
+- GitHub: [@MarkTegna](https://github.com/MarkTegna)
 
 ## Version History
 
-- **v1.0.0 (2026-01-19)**: Initial release
-  - Complete web interface for NetWalker database
-  - Device, VLAN, and interface management
-  - Comprehensive reporting
-  - Global search functionality
-  - Responsive design with modern UI
+### v0.1.0 (Initial Release)
+- Basic device inventory API
+- Simple web interface
+- Excel report generation
+- Database integration
+
+---
+
+**Note**: This is a companion project to NetWalker. NetWalker performs network discovery and populates the database. This web UI provides read-only access for reporting and visualization.
