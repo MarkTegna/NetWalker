@@ -452,11 +452,42 @@ class DiscoveryEngine:
                 logger.info(f"  [INVENTORY] Added {device_key} to inventory as FILTERED")
                 return
             
-            logger.info(f"  [NOT FILTERED] Device {device_key} passed initial filtering - proceeding with connection")
+            logger.info(f"  [NOT FILTERED] Device {device_key} passed initial filtering (hostname/IP only)")
+            
+            # Pre-connection filter: look up platform/capabilities from database
+            # This catches devices like PAN-OS firewalls that are excluded by platform
+            # but can't be filtered by hostname/IP alone
+            if self.db_manager and self.db_manager.enabled:
+                db_platform = self.db_manager.get_device_platform(node.hostname)
+                if not db_platform:
+                    db_platform = self.db_manager.get_device_platform(node.ip_address)
+                
+                if db_platform:
+                    logger.info(f"  [DB LOOKUP] Found platform '{db_platform}' for {device_key} in database")
+                    if self.filter_manager.should_filter_device(
+                        node.hostname, node.ip_address, db_platform, None
+                    ):
+                        logger.info(f"  [FILTERED BY DB PLATFORM] Device {device_key} filtered - platform '{db_platform}' is excluded")
+                        self.filter_manager.mark_as_boundary(
+                            node.hostname, node.ip_address,
+                            f"Filtered by database platform: {db_platform}"
+                        )
+                        device_info = self._create_basic_device_info(node, "filtered")
+                        device_info['platform'] = db_platform
+                        device_info['skip_reason'] = f"Filtered by platform ({db_platform}) from database lookup"
+                        self.inventory.add_device(device_key, device_info, "filtered")
+                        logger.info(f"  [INVENTORY] Added {device_key} to inventory as FILTERED (pre-connection DB lookup)")
+                        return
+                else:
+                    logger.info(f"  [DB LOOKUP] No platform found for {device_key} in database")
             
             # Check connection failure threshold if database is enabled
             connection_config = self.config.get('connection', {})
             skip_after_failures = getattr(connection_config, 'skip_after_failures', 3) if hasattr(connection_config, 'skip_after_failures') else connection_config.get('skip_after_failures', 3)
+            
+            # CLI --ignore-failures overrides skip_after_failures
+            if self.config.get('ignore_failures', False):
+                skip_after_failures = 0
             
             if self.db_manager and self.db_manager.enabled and skip_after_failures > 0:
                 failure_count = self.db_manager.get_connection_failures(node.hostname)

@@ -129,6 +129,12 @@ def create_parser():
     )
     
     discovery_parser.add_argument(
+        '--ignore-failures',
+        action='store_true',
+        help='Ignore connection failure counts - attempt all devices regardless of past failures'
+    )
+
+    discovery_parser.add_argument(
         '--walk-unwalked',
         action='store_true',
         help='Walk devices discovered but never walked (Unwalked Neighbors, ignores seed file)'

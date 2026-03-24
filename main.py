@@ -229,6 +229,12 @@ Version: {__version__}
     )
 
     parser.add_argument(
+        '--ignore-failures',
+        action='store_true',
+        help='Ignore connection failure counts - attempt all devices regardless of past failures'
+    )
+
+    parser.add_argument(
         '--walk-unwalked',
         action='store_true',
         help='Walk devices discovered but never walked (Unwalked Neighbors, ignores seed file)'
@@ -286,6 +292,9 @@ def convert_args_to_config(args):
     if args.verbose:
         config_overrides['log_level'] = 'DEBUG'
         config_overrides['console_logging'] = True
+
+    if hasattr(args, 'ignore_failures') and args.ignore_failures:
+        config_overrides['ignore_failures'] = True
 
     return config_overrides
 

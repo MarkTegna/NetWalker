@@ -2452,7 +2452,7 @@ class DatabaseManager:
         Get connection failure count for a device
 
         Args:
-            device_name: Device hostname
+            device_name: Device hostname or IP address
 
         Returns:
             Connection failure count, or 0 if device not found or database disabled
@@ -2477,6 +2477,19 @@ class DatabaseManager:
             """, (short_hostname,))
 
             row = cursor.fetchone()
+
+            if not row:
+                # Try lookup by IP address in device_interfaces table
+                # This handles devices stored with IP addresses as device_name
+                cursor.execute("""
+                    SELECT TOP 1 d.connection_failures
+                    FROM devices d
+                    INNER JOIN device_interfaces di ON d.device_id = di.device_id
+                    WHERE di.ip_address = ?
+                    ORDER BY d.last_seen DESC
+                """, (device_name,))
+                row = cursor.fetchone()
+
             cursor.close()
 
             if row:
@@ -2496,7 +2509,7 @@ class DatabaseManager:
         Increment connection failure count for a device
 
         Args:
-            device_name: Device hostname
+            device_name: Device hostname or IP address
 
         Returns:
             True if successful, False otherwise
@@ -2529,6 +2542,23 @@ class DatabaseManager:
 
             rows_affected = cursor.rowcount
 
+            if rows_affected == 0:
+                # Try lookup by IP address in device_interfaces table
+                # This handles devices stored with IP addresses as device_name
+                cursor.execute("""
+                    UPDATE d
+                    SET d.connection_failures = d.connection_failures + 1,
+                        d.connection_method = CASE
+                            WHEN d.connection_method IS NULL THEN 'Unsuccessful'
+                            ELSE d.connection_method
+                        END,
+                        d.updated_at = GETDATE()
+                    FROM devices d
+                    INNER JOIN device_interfaces di ON d.device_id = di.device_id
+                    WHERE di.ip_address = ?
+                """, (device_name,))
+                rows_affected = cursor.rowcount
+
             if rows_affected > 0:
                 # Get the new failure count for logging
                 cursor.execute("""
@@ -2539,6 +2569,17 @@ class DatabaseManager:
                 """, (short_hostname,))
 
                 row = cursor.fetchone()
+                if not row:
+                    # Try IP lookup for the count too
+                    cursor.execute("""
+                        SELECT TOP 1 d.connection_failures
+                        FROM devices d
+                        INNER JOIN device_interfaces di ON d.device_id = di.device_id
+                        WHERE di.ip_address = ?
+                        ORDER BY d.last_seen DESC
+                    """, (device_name,))
+                    row = cursor.fetchone()
+
                 new_count = row[0] if row else 0
 
                 self.connection.commit()

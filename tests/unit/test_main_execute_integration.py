@@ -102,6 +102,7 @@ class TestMainExecuteIntegration:
         mock_args.db_status = False
         mock_args.rewalk_stale = None
         mock_args.walk_unwalked = False
+        mock_args.ignore_failures = False
         mock_parse_arguments.return_value = mock_args
 
         # Simulate command line without execute
