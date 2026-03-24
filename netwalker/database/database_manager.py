@@ -850,17 +850,46 @@ class DatabaseManager:
                         self.logger.info(f"Updated unwalked neighbor to walked device: {device_name} (ID: {device_id})")
                         is_new_device = True  # Count as new since it's now fully walked
                     else:
-                        # No unwalked neighbor found, insert new device
+                        # Check if device exists with same name but different serial
+                        # (e.g. stack failover changed which member reports as system serial)
                         cursor.execute("""
-                            INSERT INTO devices (device_name, serial_number, platform, hardware_model, capabilities, uptime_hours, uptime_raw, connection_method)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (device_name, serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, connection_method or None))
+                            SELECT TOP 1 device_id FROM devices
+                            WHERE device_name = ? AND serial_number != 'unknown'
+                            ORDER BY last_seen DESC
+                        """, (device_name,))
 
-                        cursor.execute("SELECT @@IDENTITY")
-                        device_id = cursor.fetchone()[0]
+                        existing_row = cursor.fetchone()
 
-                        self.logger.info(f"Created new device: {device_name} (ID: {device_id})")
-                        is_new_device = True
+                        if existing_row:
+                            # Update existing record with new serial (stack failover)
+                            device_id = existing_row[0]
+                            cursor.execute("""
+                                UPDATE devices
+                                SET serial_number = ?,
+                                    last_seen = GETDATE(),
+                                    platform = COALESCE(NULLIF(?, ''), platform),
+                                    hardware_model = COALESCE(NULLIF(?, ''), hardware_model),
+                                    capabilities = COALESCE(NULLIF(?, ''), capabilities),
+                                    uptime_hours = COALESCE(?, uptime_hours),
+                                    uptime_raw = COALESCE(NULLIF(?, ''), uptime_raw),
+                                    connection_method = COALESCE(NULLIF(?, ''), connection_method),
+                                    updated_at = GETDATE()
+                                WHERE device_id = ?
+                            """, (serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, connection_method, device_id))
+
+                            self.logger.info(f"Updated device serial (stack failover): {device_name} (ID: {device_id})")
+                        else:
+                            # Truly new device, insert
+                            cursor.execute("""
+                                INSERT INTO devices (device_name, serial_number, platform, hardware_model, capabilities, uptime_hours, uptime_raw, connection_method)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (device_name, serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, connection_method or None))
+
+                            cursor.execute("SELECT @@IDENTITY")
+                            device_id = cursor.fetchone()[0]
+
+                            self.logger.info(f"Created new device: {device_name} (ID: {device_id})")
+                            is_new_device = True
                 else:
                     # serial_number is 'unknown', just insert as unwalked neighbor
                     cursor.execute("""
