@@ -209,10 +209,20 @@ class FilterManager:
             return False
     
     def _matches_capability_exclusion(self, capabilities: List[str]) -> bool:
-        """Check if any capability matches exclusions"""
+        """Check if any capability matches exclusions.
+        
+        Uses smart filtering: if a device has infrastructure capabilities
+        (Router, Switch) alongside an excluded capability (e.g. Phone),
+        it's not a true endpoint device — don't filter it.
+        """
         import re
-        capabilities_lower = [cap.lower() for cap in capabilities]
+        capabilities_lower = [cap.lower().strip() for cap in capabilities]
         logger.debug(f"    Checking capabilities {capabilities_lower} against exclusions: {self.criteria.capability_excludes}")
+        
+        # Infrastructure capabilities that indicate the device is a switch/router,
+        # not a true endpoint even if it also reports phone/camera/etc.
+        infrastructure_caps = {'router', 'switch'}
+        has_infrastructure = bool(infrastructure_caps.intersection(set(capabilities_lower)))
         
         for excluded_cap in self.criteria.capability_excludes:
             for cap in capabilities_lower:
@@ -220,6 +230,12 @@ class FilterManager:
                 # This ensures "phone" matches "phone" or "ip phone" but not "phone port"
                 pattern = r'\b' + re.escape(excluded_cap) + r'\b'
                 if re.search(pattern, cap):
+                    # If device also has infrastructure capabilities (Router/Switch),
+                    # don't filter it — it's a switch/router that happens to support phones
+                    if has_infrastructure:
+                        logger.debug(f"    [OVERRIDE] Capability '{cap}' matches '{excluded_cap}' but device also has "
+                                   f"infrastructure capabilities {infrastructure_caps.intersection(set(capabilities_lower))} - NOT filtering")
+                        return False
                     logger.debug(f"    [MATCH] Capability '{cap}' matches excluded pattern '{excluded_cap}' (regex: {pattern})")
                     return True
                 else:

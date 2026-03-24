@@ -769,20 +769,8 @@ class DiscoveryEngine:
                 if '.' in neighbor_hostname:
                     neighbor_hostname = neighbor_hostname.split('.')[0]
                 
-                # If no IP address available, try DNS resolution
-                if not neighbor_ip:
-                    logger.info(f"    [DNS RESOLUTION] Neighbor {neighbor_hostname} has no IP address, attempting DNS lookup")
-                    try:
-                        import socket
-                        resolved_ip = socket.gethostbyname(neighbor_hostname)
-                        neighbor_ip = resolved_ip
-                        logger.info(f"    [DNS SUCCESS] Resolved {neighbor_hostname} to {resolved_ip}")
-                    except (socket.gaierror, socket.herror, OSError) as e:
-                        logger.warning(f"    [DNS FAILED] Could not resolve {neighbor_hostname}: {e}")
-                        logger.debug(f"Skipping neighbor {neighbor_hostname} - no IP address available and DNS resolution failed")
-                        continue
-                    
-                neighbor_ip = neighbor_ip.strip()
+                if neighbor_ip:
+                    neighbor_ip = neighbor_ip.strip()
             else:
                 # Dictionary format (fallback)
                 neighbor_hostname = neighbor.get('hostname', '').strip()
@@ -791,35 +779,51 @@ class DiscoveryEngine:
                 neighbor_platform = neighbor.get('platform', None)
                 neighbor_capabilities = neighbor.get('capabilities', [])
             
-            if not neighbor_hostname or not neighbor_ip:
-                logger.debug(f"Skipping neighbor with missing hostname or IP: {neighbor}")
+            if not neighbor_hostname:
+                logger.debug(f"Skipping neighbor with missing hostname: {neighbor}")
                 continue
             
-            # Check if neighbor should be filtered based on platform/capabilities
-            logger.info(f"    [NEIGHBOR DECISION] Evaluating neighbor {neighbor_hostname}:{neighbor_ip}")
+            # Check exclusions BEFORE DNS resolution or connection attempts
+            # This prevents unnecessary network activity for excluded devices
+            # First check hostname-based exclusions (always available)
+            # Then check platform/capability exclusions if that data is available
+            logger.info(f"    [NEIGHBOR DECISION] Evaluating neighbor {neighbor_hostname}:{neighbor_ip or 'no-ip'}")
             logger.info(f"      Neighbor details: platform='{neighbor_platform}', capabilities={neighbor_capabilities}")
             
             if self.filter_manager.should_filter_device(
-                neighbor_hostname, neighbor_ip, neighbor_platform, neighbor_capabilities
+                neighbor_hostname, neighbor_ip or '', neighbor_platform, neighbor_capabilities
             ):
-                logger.info(f"    [NEIGHBOR FILTERED] {neighbor_hostname}:{neighbor_ip} will not be added to discovery queue")
+                logger.info(f"    [NEIGHBOR FILTERED] {neighbor_hostname}:{neighbor_ip or 'no-ip'} will not be added to discovery queue")
                 logger.info(f"      Reason: platform='{neighbor_platform}', capabilities={neighbor_capabilities}")
                 self.filter_manager.mark_as_boundary(
-                    neighbor_hostname, neighbor_ip, 
+                    neighbor_hostname, neighbor_ip or '', 
                     f"Filtered by platform ({neighbor_platform}) or capabilities ({neighbor_capabilities})"
                 )
                 
                 # Add to inventory as filtered with skip reason
                 device_info = self._create_basic_device_info_for_neighbor(
-                    neighbor_hostname, neighbor_ip, parent_node.depth + 1, 
+                    neighbor_hostname, neighbor_ip or '', parent_node.depth + 1, 
                     protocol, parent_node.device_key, "filtered", 
                     neighbor_platform, neighbor_capabilities
                 )
                 device_info['skip_reason'] = f"Filtered by platform ({neighbor_platform}) or capabilities ({', '.join(neighbor_capabilities) if neighbor_capabilities else 'none'})"
-                self.inventory.add_device(f"{neighbor_hostname}:{neighbor_ip}", device_info, "filtered")
+                self.inventory.add_device(f"{neighbor_hostname}:{neighbor_ip or 'no-ip'}", device_info, "filtered")
                 continue
             
-            logger.info(f"    [NEIGHBOR PASSED] {neighbor_hostname}:{neighbor_ip} passed filtering checks")
+            logger.info(f"    [NEIGHBOR PASSED] {neighbor_hostname}:{neighbor_ip or 'no-ip'} passed filtering checks")
+            
+            # DNS resolution AFTER filtering - only resolve IPs for non-excluded devices
+            if not neighbor_ip:
+                logger.info(f"    [DNS RESOLUTION] Neighbor {neighbor_hostname} has no IP address, attempting DNS lookup")
+                try:
+                    import socket
+                    resolved_ip = socket.gethostbyname(neighbor_hostname)
+                    neighbor_ip = resolved_ip
+                    logger.info(f"    [DNS SUCCESS] Resolved {neighbor_hostname} to {resolved_ip}")
+                except (socket.gaierror, socket.herror, OSError) as e:
+                    logger.warning(f"    [DNS FAILED] Could not resolve {neighbor_hostname}: {e}")
+                    logger.debug(f"Skipping neighbor {neighbor_hostname} - no IP address available and DNS resolution failed")
+                    continue
             
             # Create neighbor node with platform from CDP/LLDP
             neighbor_node = DiscoveryNode(

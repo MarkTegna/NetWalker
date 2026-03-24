@@ -287,6 +287,16 @@ class DatabaseManager:
                 END
             """)
 
+            # Add connection_method column to track SSH/Telnet/Unsuccessful
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.columns
+                              WHERE object_id = OBJECT_ID('devices')
+                              AND name = 'connection_method')
+                BEGIN
+                    ALTER TABLE devices ADD connection_method NVARCHAR(20) NULL;
+                END
+            """)
+
             # Create device_versions table
             cursor.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_versions')
@@ -768,6 +778,9 @@ class DatabaseManager:
         uptime_raw = device_info.get('uptime', '')
         uptime_hours = self.parse_uptime_to_hours(uptime_raw) if uptime_raw else None
 
+        # Get connection method (SSH/Telnet)
+        connection_method = device_info.get('connection_method', '')
+
         # Convert capabilities list to comma-separated string
         capabilities_str = ','.join(capabilities) if capabilities else None
 
@@ -789,18 +802,20 @@ class DatabaseManager:
             is_new_device = False
             if row:
                 # Update existing device with same name and serial
+                # Use COALESCE to preserve existing data when new values are empty/null
                 device_id = row[0]
                 cursor.execute("""
                     UPDATE devices
                     SET last_seen = GETDATE(),
-                        platform = ?,
-                        hardware_model = ?,
-                        capabilities = ?,
-                        uptime_hours = ?,
-                        uptime_raw = ?,
+                        platform = COALESCE(NULLIF(?, ''), platform),
+                        hardware_model = COALESCE(NULLIF(?, ''), hardware_model),
+                        capabilities = COALESCE(NULLIF(?, ''), capabilities),
+                        uptime_hours = COALESCE(?, uptime_hours),
+                        uptime_raw = COALESCE(NULLIF(?, ''), uptime_raw),
+                        connection_method = COALESCE(NULLIF(?, ''), connection_method),
                         updated_at = GETDATE()
                     WHERE device_id = ?
-                """, (platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, device_id))
+                """, (platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, connection_method, device_id))
 
                 self.logger.debug(f"Updated device: {device_name} (ID: {device_id})")
             else:
@@ -816,28 +831,30 @@ class DatabaseManager:
 
                     if unwalked_row:
                         # Update the unwalked neighbor record with real data
+                        # Use COALESCE to preserve any existing data when new values are empty/null
                         device_id = unwalked_row[0]
                         cursor.execute("""
                             UPDATE devices
                             SET serial_number = ?,
                                 last_seen = GETDATE(),
-                                platform = ?,
-                                hardware_model = ?,
-                                capabilities = ?,
-                                uptime_hours = ?,
-                                uptime_raw = ?,
+                                platform = COALESCE(NULLIF(?, ''), platform),
+                                hardware_model = COALESCE(NULLIF(?, ''), hardware_model),
+                                capabilities = COALESCE(NULLIF(?, ''), capabilities),
+                                uptime_hours = COALESCE(?, uptime_hours),
+                                uptime_raw = COALESCE(NULLIF(?, ''), uptime_raw),
+                                connection_method = COALESCE(NULLIF(?, ''), connection_method),
                                 updated_at = GETDATE()
                             WHERE device_id = ?
-                        """, (serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, device_id))
+                        """, (serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, connection_method, device_id))
 
                         self.logger.info(f"Updated unwalked neighbor to walked device: {device_name} (ID: {device_id})")
                         is_new_device = True  # Count as new since it's now fully walked
                     else:
                         # No unwalked neighbor found, insert new device
                         cursor.execute("""
-                            INSERT INTO devices (device_name, serial_number, platform, hardware_model, capabilities, uptime_hours, uptime_raw)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (device_name, serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw))
+                            INSERT INTO devices (device_name, serial_number, platform, hardware_model, capabilities, uptime_hours, uptime_raw, connection_method)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (device_name, serial_number, platform, hardware_model, capabilities_str, uptime_hours, uptime_raw, connection_method or None))
 
                         cursor.execute("SELECT @@IDENTITY")
                         device_id = cursor.fetchone()[0]
@@ -2468,9 +2485,15 @@ class DatabaseManager:
             short_hostname = device_name.split('.')[0] if '.' in device_name else device_name
 
             # Update connection_failures for the device
+            # Also set connection_method to 'Unsuccessful' only if it's currently NULL
+            # Never overwrite SSH or Telnet with Unsuccessful
             cursor.execute("""
                 UPDATE devices
                 SET connection_failures = connection_failures + 1,
+                    connection_method = CASE
+                        WHEN connection_method IS NULL THEN 'Unsuccessful'
+                        ELSE connection_method
+                    END,
                     updated_at = GETDATE()
                 WHERE device_name = ?
             """, (short_hostname,))

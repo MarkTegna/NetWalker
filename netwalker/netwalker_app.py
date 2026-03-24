@@ -415,6 +415,13 @@ class NetWalkerApp:
                             logger.warning("Skipping entry with empty hostname")
                             continue
                         
+                        # Check exclusions BEFORE DNS resolution
+                        if self.filter_manager and self.filter_manager.should_filter_device(
+                            hostname, ip_address or '', None, None
+                        ):
+                            logger.info(f"Skipping excluded device from seed file: {hostname}")
+                            continue
+                        
                         # Detect blank IP addresses and resolve them
                         if not ip_address or ip_address.isspace():
                             logger.info(f"Blank IP detected for {hostname}, attempting resolution...")
@@ -444,6 +451,13 @@ class NetWalkerApp:
                             # Skip entries with empty hostname
                             if not hostname:
                                 logger.warning("Skipping entry with empty hostname")
+                                continue
+                            
+                            # Check exclusions BEFORE DNS resolution
+                            if self.filter_manager and self.filter_manager.should_filter_device(
+                                hostname, ip_address or '', None, None
+                            ):
+                                logger.info(f"Skipping excluded device from seed file: {hostname}")
                                 continue
                             
                             # Detect blank IP addresses and resolve them
