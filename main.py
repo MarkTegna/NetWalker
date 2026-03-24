@@ -448,7 +448,6 @@ def handle_visio_with_new_cli(args):
     # Continue with existing visio handling code below
     from netwalker.config.config_manager import ConfigurationManager
     from netwalker.database import DatabaseManager
-    import logging
 
     # The rest will use the existing visio code path
     # For now, return error - full implementation needed
@@ -546,7 +545,6 @@ def main():
             from netwalker.config.config_manager import ConfigurationManager
             from netwalker.database import DatabaseManager
             import pyodbc
-            import logging
 
             # Try to import COM generator, fall back to vsdx if not available
             try:
