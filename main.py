@@ -372,6 +372,50 @@ def handle_execute_command(args):
         return 1
 
 
+def handle_inventory_command(args):
+    """
+    Handle the 'inventory' command to export device inventory to Excel.
+    """
+    from datetime import datetime
+    from netwalker.config.config_manager import ConfigurationManager
+    from netwalker.database import DatabaseManager
+    from netwalker.reports.inventory_exporter import create_device_inventory_spreadsheet
+
+    print_console_banner()
+
+    try:
+        config_manager = ConfigurationManager(args.config)
+        parsed_config = config_manager.load_configuration()
+        db_config = parsed_config.get('database', {})
+
+        db_manager = DatabaseManager(db_config)
+        if not db_manager.connect():
+            print("[FAIL] Could not connect to database")
+            return 1
+
+        try:
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M')
+            output_file = args.output if args.output else f"Device_Inventory_{timestamp}.xlsx"
+
+            print(f"Generating device inventory spreadsheet...")
+            print(f"Output file: {output_file}")
+
+            device_count, stack_count = create_device_inventory_spreadsheet(output_file, db_manager)
+
+            print(f"\n[OK] Device inventory exported successfully")
+            print(f"  Total devices: {device_count}")
+            print(f"  Stack members: {stack_count}")
+            print(f"  File: {output_file}")
+            return 0
+
+        finally:
+            db_manager.disconnect()
+
+    except Exception as e:
+        print(f"\n[FAIL] Error exporting inventory: {e}")
+        return 1
+
+
 def handle_ipv4_prefix_inventory_command(args):
     """
     Handle the 'ipv4-prefix-inventory' command to collect IPv4 prefixes.
@@ -496,7 +540,7 @@ def main():
     use_new_cli = (
         '--help' in sys.argv or
         '-h' in sys.argv or
-        (len(sys.argv) > 1 and sys.argv[1] in ['execute', 'ipv4-prefix-inventory', 'visio', 'discover'])
+        any(arg in ['execute', 'ipv4-prefix-inventory', 'visio', 'discover', 'inventory'] for arg in sys.argv[1:])
     )
     
     if use_new_cli:
@@ -515,6 +559,8 @@ def main():
             elif args.command == 'discover':
                 # Handle discover command using new CLI args
                 return handle_discover_with_new_cli(args)
+            elif args.command == 'inventory':
+                return handle_inventory_command(args)
             else:
                 # No command specified, show help
                 parse_cli_args(['--help'])

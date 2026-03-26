@@ -217,6 +217,23 @@ def create_parser():
         help='Output directory for Excel file (default: current directory)'
     )
     
+    # Inventory export command
+    inventory_parser = subparsers.add_parser(
+        'inventory',
+        help='Export device inventory from database to Excel spreadsheet'
+    )
+
+    inventory_parser.add_argument(
+        '--config', '-c',
+        default='netwalker.ini',
+        help='Configuration file path (default: netwalker.ini)'
+    )
+
+    inventory_parser.add_argument(
+        '--output', '-o',
+        help='Output file path (default: Device_Inventory_YYYYMMDD-HHMM.xlsx)'
+    )
+
     # IPv4 Prefix Inventory command
     ipv4_parser = subparsers.add_parser(
         'ipv4-prefix-inventory',

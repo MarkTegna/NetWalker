@@ -1,0 +1,16 @@
+import pyodbc, base64
+conn = pyodbc.connect('DRIVER={SQL Server};SERVER=eit-prisqldb01.tgna.tegna.com;DATABASE=NetWalker;UID=NetWalker;PWD=' + base64.b64decode('Rmx1ZmZ5QnVubnlIaXRieWFCdXM=').decode())
+c = conn.cursor()
+c.execute('SELECT COUNT(*) FROM devices')
+print(f'Total devices: {c.fetchone()[0]}')
+c.execute("SELECT status, COUNT(*) FROM devices GROUP BY status ORDER BY status")
+for r in c.fetchall():
+    print(f'  {r[0]}: {r[1]}')
+c.execute("SELECT COUNT(*) FROM devices WHERE status = 'active'")
+print(f'\nActive only: {c.fetchone()[0]}')
+c.execute("SELECT COUNT(*) FROM devices WHERE status = 'active' AND hardware_model = 'Unwalked Neighbor'")
+print(f'Active + Unwalked Neighbor: {c.fetchone()[0]}')
+c.execute("SELECT COUNT(*) FROM devices WHERE status = 'active' AND hardware_model != 'Unwalked Neighbor'")
+print(f'Active + NOT Unwalked: {c.fetchone()[0]}')
+c.close()
+conn.close()
